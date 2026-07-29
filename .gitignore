@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.pyc
+
+.env
+.venv/
+venv/
+
+*.db
+candidates.db
+
+.DS_Store
