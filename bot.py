@@ -125,12 +125,13 @@ async def check_silent_candidates():
             storage.mark_flagged_silent(candidate["chat_id"])
 
 
+dp = Dispatcher()
+dp.include_router(router)
+
 async def main():
     global bot
     session = AiohttpSession(timeout=60)
     bot = Bot(token=BOT_TOKEN, session=session)
-    dp = Dispatcher()
-    dp.include_router(router)
 
     asyncio.create_task(check_silent_candidates())
     await dp.start_polling(bot, handle_signals=False)
