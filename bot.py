@@ -131,7 +131,7 @@ async def main():
     dp.include_router(router)
 
     asyncio.create_task(check_silent_candidates())
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, handle_signals=False)
 
 
 if __name__ == "__main__":
