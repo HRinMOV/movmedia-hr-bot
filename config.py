@@ -1,98 +1,21 @@
-import anthropic
+import os
+from dotenv import load_dotenv
 
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
-from system_prompt import build_system_prompt
+load_dotenv()
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-TOOLS = [
-    {
-        "name": "notify_recruiter",
-        "description": (
-            "Отправить рекрутеру Алине сообщение о кандидате. Используй это, когда: "
-            "(a) кандидат прислал всё необходимое (вакансия, имя, резюме, телефон, "
-            "тестовое если применимо) — пришли полную сводку по кандидату; "
-            "(b) кандидат задал вопрос, точного ответа на который нет в базе знаний — "
-            "передай вопрос дословно; "
-            "(c) кандидат уже второй раз и более просит связать напрямую с рекрутером; "
-            "(d) кандидат явно сообщил, что передумал проходить отбор."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "enum": [
-                        "candidate_summary",
-                        "unknown_question",
-                        "connect_request",
-                        "withdrawal",
-                    ],
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Текст сообщения рекрутеру — понятный, структурированный, на русском.",
-                },
-            },
-            "required": ["reason", "message"],
-        },
-    },
-    {
-        "name": "update_candidate_stage",
-        "description": (
-            "Обновить внутреннюю стадию кандидата для технического отслеживания "
-            "прогресса. Кандидат не видит этот вызов."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "stage": {
-                    "type": "string",
-                    "enum": ["test_task_sent", "test_task_submitted", "withdrawn"],
-                }
-            },
-            "required": ["stage"],
-        },
-    },
-]
+# chat_id Алины (или группы рекрутинга) — куда бот шлёт уведомления и файлы
+RECRUITER_CHAT_ID = os.getenv("RECRUITER_CHAT_ID")
 
+# Модель Claude для ведения диалога
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 
-def run_turn(history: list, tool_executor) -> tuple[str, list]:
-    """
-    Прогоняет один ход диалога: вызывает Claude, при необходимости выполняет
-    tool-calls через tool_executor(name, input) -> str, и возвращает
-    (финальный текст для кандидата, обновлённая история сообщений).
-    """
-    system_prompt = build_system_prompt()
-    messages = list(history)
+# Через сколько часов без ответа кандидата после отправки тестового считать его "пропавшим"
+SILENT_CANDIDATE_HOURS = int(os.getenv("SILENT_CANDIDATE_HOURS", "72"))
 
-    while True:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            system=system_prompt,
-            tools=TOOLS,
-            messages=messages,
-        )
+# Как часто (в секундах) проверять базу на "пропавших" кандидатов
+SILENT_CHECK_INTERVAL_SECONDS = int(os.getenv("SILENT_CHECK_INTERVAL_SECONDS", "3600"))
 
-        assistant_content = [block.model_dump() for block in response.content]
-        messages.append({"role": "assistant", "content": assistant_content})
-
-        if response.stop_reason != "tool_use":
-            final_text = "".join(
-                block.text for block in response.content if block.type == "text"
-            )
-            return final_text, messages
-
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                result_text = tool_executor(block.name, block.input)
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    }
-                )
-        messages.append({"role": "user", "content": tool_results})
+DB_PATH = os.getenv("DB_PATH", "candidates.db")
