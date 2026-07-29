@@ -1,9 +1,1 @@
-BOT_TOKEN=вставьте_токен_от_BotFather
-ANTHROPIC_API_KEY=вставьте_ваш_ключ_Anthropic_API
-RECRUITER_CHAT_ID=вставьте_chat_id_Алины_или_группы
-
-# необязательные, есть значения по умолчанию
-CLAUDE_MODEL=claude-sonnet-5
-SILENT_CANDIDATE_HOURS=72
-SILENT_CHECK_INTERVAL_SECONDS=3600
-DB_PATH=candidates.db
+web: gunicorn app:app --workers 1 --threads 4
