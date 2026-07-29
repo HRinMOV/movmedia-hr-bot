@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
@@ -126,7 +127,8 @@ async def check_silent_candidates():
 
 async def main():
     global bot
-    bot = Bot(token=BOT_TOKEN)
+    session = AiohttpSession(timeout=60)
+    bot = Bot(token=BOT_TOKEN, session=session)
     dp = Dispatcher()
     dp.include_router(router)
 
