@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+KNOWLEDGE_DIR = Path(__file__).parent
 
 
 def _load(name: str) -> dict:
