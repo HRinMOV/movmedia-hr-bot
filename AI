@@ -1,0 +1,1059 @@
+import json
+from pathlib import Path
+
+KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+
+
+def _load(name: str) -> dict:
+    with open(KNOWLEDGE_DIR / name, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def build_system_prompt() -> str:
+    company = _load("company.json")
+    vacancies = _load("vacancies.json")
+    faq_data = _load("faq.json")
+
+    vacancies_block = json.dumps(vacancies, ensure_ascii=False, indent=2)
+    faq_block = json.dumps(faq_data["faq"], ensure_ascii=False, indent=2)
+
+    return f"""
+Ты — {company['assistant_name']}, AI-ассистент по подбору персонала в
+компании MOVmedia. При первом сообщении в диалоге представься этим именем.
+Ты сопровождаешь
+кандидата на первом этапе отбора: знакомишь с компанией и вакансией, собираешь
+анкету, выдаёшь тестовое (если оно предусмотрено вакансией), принимаешь
+выполненное тестовое и отвечаешь на вопросы кандидата — до момента передачи
+информации рекрутеру.
+
+# Тон общения
+Общайся на "ты", дружелюбно и профессионально. Если кандидат задаёт вопросы не
+по существу (не про вакансию, компанию или процесс найма) — вежливо предложи
+оставаться в профессиональных рамках и объясни, что ты ассистент, который
+упрощает процесс первичного знакомства кандидата с командой. Ты не
+обсуждаешь посторонние темы вообще, только вакансии, компанию и предстоящую
+работу. В конце диалога желай успехов в выполнении тестового (если оно есть)
+и хорошего дня; если кандидат соблюдает профессиональную этику — говори, что
+будете рады работать вместе.
+
+# Данные о компании
+{json.dumps(company, ensure_ascii=False, indent=2)}
+
+# Открытые вакансии
+{vacancies_block}
+
+# FAQ (черновик, может пополняться)
+{faq_block}
+
+# Базовый сценарий диалога
+1. Поприветствуй кандидата, кратко расскажи о MOVmedia, пришли ссылку на сайт
+   ({company['site']}) и предложи почитать о компании подробнее, если интересно.
+2. Спроси, на какую вакансию кандидат откликнулся (PR-менеджер или
+   Project-менеджер). Если кандидат сразу называет вакансию или сразу просит
+   тестовое — можно пропустить лишние шаги и перейти к делу.
+3. Кратко расскажи о вакансии (обязанности, требования, условия) — только то,
+   что указано в базе знаний выше.
+4. Собери у кандидата: имя, резюме (файлом или ссылкой) и телефон для связи.
+   Можно делать это в любом порядке, подстраиваясь под то, как отвечает
+   кандидат — не нужно жёстко идти по чек-листу.
+5. Если у вакансии есть тестовое задание (has_test_task = true) — выдай его
+   по правилам delivery_type (для PR-менеджера — это просто ссылка на Notion,
+   она публичная; если кандидат пишет, что не открывается — посоветуй
+   использовать VPN). Объясни критерии оценки (evaluation_focus) и политику
+   сроков (deadline_policy). Отвечай на уточняющие вопросы по тестовому, но
+   НИКОГДА не помогай выполнять само задание и не давай примеров решения.
+   Если вакансия без тестового (has_test_task = false) — сразу переходи к
+   пункту 6.
+6. Когда кандидат прислал всё необходимое (анкету, резюме, тестовое если
+   применимо) — поблагодари, кратко опиши следующие этапы отбора
+   (hiring_process_steps) и вызови инструмент notify_recruiter с полной
+   сводкой по кандидату.
+
+# Как отвечать на вопросы кандидата
+Отвечай только тем, что есть в базе знаний выше. Если информации
+недостаточно — НИКОГДА не придумывай ответ. Вместо этого честно скажи, что
+точной информации сейчас нет, и вызови инструмент notify_recruiter с
+reason="unknown_question", передав точный вопрос кандидата дословно.
+
+# Если кандидат просит напрямую соединить с рекрутером
+Если кандидат уже во второй (или более) раз в этом диалоге просит связать его
+с рекрутером/человеком напрямую — сообщи, что ты уже передал информацию
+рекрутеру и он свяжется с кандидатом в течение рабочих суток, и вызови
+notify_recruiter с reason="connect_request".
+
+# Если кандидат передумал
+Если кандидат явно говорит, что передумал проходить отбор — прими это
+доброжелательно, поблагодари за уделённое время, и вызови notify_recruiter с
+reason="withdrawal".
+
+# Отслеживание стадии
+Вызывай update_candidate_stage сразу после соответствующего события:
+- "test_task_sent" — сразу после того как выдал тестовое задание кандидату
+- "test_task_submitted" — сразу после того как кандидат прислал выполненное
+  тестовое
+- "withdrawn" — если кандидат явно вышел из процесса
+Это отдельный технический вызов, кандидат не должен видеть, что ты его делаешь.
+
+# Важно
+Не выдумывай вакансии, условия или цифры, которых нет в базе знаний выше.
+Файлы (резюме, тестовое задание), которые присылает кандидат, дублируются
+рекрутеру автоматически на уровне бота — тебе не нужно ничего пересылать
+руками, только реагировать на них текстом и, если нужно, звать
+notify_recruiter или update_candidate_stage.
+"""
+
+{
+  "pr_manager": {
+    "title": "PR-менеджер",
+    "description": "Создание и реализация PR-стратегии студии, с акцентом на участие в профильных мероприятиях, премиях, рейтингах.",
+    "responsibilities": [
+      "Вирусный контент в связке с инфоповодами: генерация идей, анализ и адаптация под различные ресурсы, продвижение контента",
+      "Креативы и персонажи (идеи уже есть): участие в создании и развитии образов, ассоциирующихся с брендом, интеграция в коммуникации с клиентами и аудиторией",
+      "Участие в рейтингах и конкурсах: мониторинг возможностей, подготовка заявок, организация участия, оценка результатов",
+      "Менеджмент упаковки и публикации кейсов: компиляция данных, адаптация и форматирование под разные ресурсы, публикация и продвижение",
+      "Участие в профильных крупных мероприятиях: исследование рынка, организация присутствия студии, пост-аналитика"
+    ],
+    "requirements": [
+      "Опыт работы в PR или управлении брендом не менее 3 лет (опыт в студии дизайна/креативном агентстве — преимущество)",
+      "Навыки работы с системами мониторинга упоминаний и автоматизации публикаций",
+      "Грамотность, умение работать с разными формами текста и сторителлингом",
+      "Опыт работы с рейтингами и конкурсами",
+      "Опыт продвижения в соцсетях и написания бизнес-ориентированных статей",
+      "Умение работать с аналитикой",
+      "Большой интерес к дизайну и понимание принципов информационного дизайна"
+    ],
+    "conditions": [
+      "Удалённый формат — можно работать откуда угодно при хорошем интернете",
+      "Доход в рынке, обсуждается индивидуально с учётом ожиданий кандидата",
+      "График 5/2 по 8 часов, официальные праздники и выходные — отдыхаем",
+      "Возможность роста до PRD и сборки команды под себя",
+      "Большой уровень свободы, влияние на глобальные решения"
+    ],
+    "has_test_task": true,
+    "test_task": {
+      "delivery_type": "link",
+      "url": "https://app.notion.com/p/movmediapro/PR-27f37858355e8062a94bc8243d9e21ba",
+      "delivery_note": "Ссылка публичная. Если у кандидата не открывается — порекомендовать использовать VPN.",
+      "submission_format": "файл или ссылка на выполненную работу — как удобнее кандидату",
+      "evaluation_focus": "Смотрим в том числе на самостоятельность выполнения. Полностью сгенерированные нейросетью работы не рассматриваем вообще — важно понять, как мыслит человек и какой у него опыт.",
+      "deadline_policy": "Жёсткого дедлайна нет, можно выполнять в комфортном режиме, но вакансию планируем закрыть в ближайшее время — лучше не затягивать."
+    }
+  },
+  "project_manager": {
+    "title": "Project-менеджер",
+    "description": "Ведение проектов для крупных брендов «под ключ»: от погружения в задачу клиента до сдачи финального результата.",
+    "responsibilities": [
+      "Погружение в задачи клиента, консультирование и ведение проектов «под ключ»",
+      "Управление бюджетом: защита бюджета, контроль исполнения и маржинальности",
+      "Подбор и координация команды исполнителей",
+      "Подготовка коммерческих предложений под запрос клиента",
+      "Роль центра коммуникации между клиентом и командой",
+      "Участие в разработке новых решений и продуктов для клиента"
+    ],
+    "requirements": [
+      "Опыт управления проектами в агентстве от 2 лет — обязательно",
+      "Портфолио в сфере дизайна, анимации, видеопродакшена, типографии — опыт работы с творческими командами",
+      "Опыт работы с генеративными и другими нейросетями",
+      "Опыт работы в таск-трекерах (особенно ценится Notion)",
+      "Понимание специфики информационного дизайна: инфографика, презентации, видеографика",
+      "Опыт подготовки коммерческих предложений под индивидуальный запрос клиента",
+      "Самостоятельность, умение брать на себя ответственность и доводить до результата"
+    ],
+    "conditions": [
+      "Честная удалёнка — можно работать откуда угодно",
+      "График 5/2, 8 часов в интервале с 9:00 до 19:00",
+      "Проекты для крупнейших клиентов рынка, простор для инициативы",
+      "Оклад + процент от каждого закрытого проекта и другие бонусы",
+      "Наставничество от руководителя студии",
+      "Бесплатное внутреннее обучение по смежным направлениям"
+    ],
+    "has_test_task": false,
+    "test_task": null
+  }
+}
+
+# Здесь описаны вакансии, вопросы для скрининга и тестовые задания.
+# Просто добавляйте/меняйте записи — бот подхватит их автоматически.
+#
+# ключ (vacancy_id) должен быть коротким и уникальным — он используется
+# в callback_data кнопок.
+
+VACANCIES = {
+    "designer": {
+        "title": "Дизайнер презентаций / инфографики",
+        "description": (
+            "Разработка слайдов, инфографики и визуализации данных для "
+            "корпоративных клиентов. Работа с брендбуками, Figma/Illustrator, "
+            "PowerPoint/Keynote."
+        ),
+        "questions": [
+            "Сколько лет опыта в дизайне презентаций или инфографики?",
+            "С какими инструментами работаете (Figma, Illustrator, PowerPoint и т.д.)?",
+            "Есть ссылка на портфолио?",
+        ],
+        "test_task": (
+            "Тестовое задание: возьмите любой открытый годовой отчёт компании "
+            "(1–2 страницы с цифрами) и сделайте инфографику-визуализацию одного "
+            "блока данных в любом удобном формате (PDF/JPG/ссылка на Figma). "
+            "Пришлите результат сюда одним файлом или ссылкой."
+        ),
+    },
+    "account": {
+        "title": "Аккаунт-менеджер",
+        "description": (
+            "Ведение проектов с корпоративными клиентами: постановка задач "
+            "дизайнерам, коммуникация с заказчиком, контроль сроков и качества."
+        ),
+        "questions": [
+            "Есть ли опыт работы в студии дизайна или digital-агентстве?",
+            "Приходилось ли вести несколько проектов одновременно? Сколько в среднем?",
+            "Какой у вас ожидаемый уровень дохода?",
+        ],
+        "test_task": (
+            "Тестовое задание: опишите в свободной форме (10-15 предложений), "
+            "как бы вы построили коммуникацию с клиентом, если дизайнер сорвал "
+            "дедлайн по презентации за 2 дня до сдачи. Пришлите ответ текстом."
+        ),
+    },
+    "sales": {
+        "title": "Менеджер по продажам (B2B)",
+        "description": (
+            "Работа с входящими и исходящими лидами, участие в тендерах, "
+            "презентация услуг студии корпоративным клиентам."
+        ),
+        "questions": [
+            "Есть ли опыт продаж в сфере B2B услуг?",
+            "Работали ли с тендерами / крупными корпоративными клиентами?",
+            "Какой у вас ожидаемый уровень дохода?",
+        ],
+        "test_task": (
+            "Тестовое задание: напишите короткое (5-7 предложений) сообщение "
+            "для холодного контакта с директором по корпоративным коммуникациям "
+            "крупной компании, предлагая услуги студии инфографики. Пришлите текстом."
+        ),
+    },
+}
+
+# Часто задаваемые вопросы — показываются в разделе FAQ
+FAQ = {
+    "О компании": (
+        "Мы студия информационного дизайна: готовим презентации, "
+        "инфографику, годовые отчёты и визуализацию данных для крупных "
+        "корпоративных клиентов."
+    ),
+    "Формат работы": (
+        "Возможен гибридный и удалённый формат — обсуждается индивидуально "
+        "на этапе интервью в зависимости от роли."
+    ),
+    "Этапы отбора": (
+        "1) Анкета и тестовое в этом боте → 2) звонок с рекрутером → "
+        "3) финальное интервью с руководителем."
+    ),
+    "Как со мной свяжутся": (
+        "После анкеты и тестового задания рекрутер получает всё в одном "
+        "сообщении и свяжется с вами в Telegram или по телефону в течение "
+        "нескольких рабочих дней."
+    ),
+}
+
+import asyncio
+import logging
+
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.filters import CommandStart
+from aiogram.types import Message
+
+import storage
+from claude_client import run_turn
+from config import (
+    BOT_TOKEN,
+    RECRUITER_CHAT_ID,
+    SILENT_CANDIDATE_HOURS,
+    SILENT_CHECK_INTERVAL_SECONDS,
+)
+
+logging.basicConfig(level=logging.INFO)
+router = Router()
+
+bot: Bot | None = None  # инициализируется в main(), используется в tool_executor
+
+
+def make_tool_executor(chat_id: int, username: str | None):
+    """Замыкание, чтобы tool-executor знал, какому кандидату он служит."""
+
+    def tool_executor(name: str, tool_input: dict) -> str:
+        if name == "notify_recruiter":
+            reason = tool_input.get("reason", "info")
+            message = tool_input.get("message", "")
+            who = f"@{username}" if username else f"id {chat_id}"
+            text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}"
+            if RECRUITER_CHAT_ID:
+                asyncio.create_task(
+                    bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML")
+                )
+            else:
+                logging.warning("RECRUITER_CHAT_ID не задан")
+            return "Уведомление отправлено рекрутеру."
+
+        if name == "update_candidate_stage":
+            stage = tool_input.get("stage")
+            storage.update_stage(chat_id, stage)
+            return f"Стадия обновлена: {stage}"
+
+        return "Неизвестный инструмент"
+
+    return tool_executor
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message):
+    username = message.from_user.username
+    candidate = storage.get_or_create(message.chat.id, username)
+    history = candidate["history"]
+
+    history.append({"role": "user", "content": "Кандидат запустил диалог (/start)."})
+    executor = make_tool_executor(message.chat.id, username)
+    reply_text, updated_history = run_turn(history, executor)
+
+    storage.save_history(message.chat.id, updated_history)
+    await message.answer(reply_text)
+
+
+@router.message(F.document | F.photo)
+async def handle_file(message: Message):
+    """Файлы (резюме, тестовое) сразу дублируются рекрутеру напрямую, в обход модели."""
+    username = message.from_user.username
+    who = f"@{username}" if username else f"id {message.chat.id}"
+
+    if RECRUITER_CHAT_ID:
+        if message.document:
+            await bot.send_document(
+                RECRUITER_CHAT_ID, message.document.file_id,
+                caption=f"Файл от кандидата {who}",
+            )
+        elif message.photo:
+            await bot.send_photo(
+                RECRUITER_CHAT_ID, message.photo[-1].file_id,
+                caption=f"Файл от кандидата {who}",
+            )
+
+    # Модель тоже должна знать, что файл получен, чтобы отреагировать текстом
+    marker = "[Кандидат прислал файл — резюме или выполненное тестовое задание.]"
+    if message.caption:
+        marker += f" Подпись к файлу: {message.caption}"
+    await process_text_turn(message, username, marker)
+
+
+@router.message(F.text)
+async def handle_text(message: Message):
+    await process_text_turn(message, message.from_user.username, message.text)
+
+
+async def process_text_turn(message: Message, username: str | None, user_text: str):
+    candidate = storage.get_or_create(message.chat.id, username)
+    history = candidate["history"]
+    history.append({"role": "user", "content": user_text})
+
+    executor = make_tool_executor(message.chat.id, username)
+    reply_text, updated_history = run_turn(history, executor)
+
+    storage.save_history(message.chat.id, updated_history)
+    await message.answer(reply_text)
+
+
+async def check_silent_candidates():
+    """Фоновая задача: раз в SILENT_CHECK_INTERVAL_SECONDS ищет кандидатов,
+    которым выдали тестовое, но они не выходят на связь дольше порога."""
+    while True:
+        await asyncio.sleep(SILENT_CHECK_INTERVAL_SECONDS)
+        silent = storage.find_silent_candidates(
+            stage="test_task_sent",
+            older_than_seconds=SILENT_CANDIDATE_HOURS * 3600,
+        )
+        for candidate in silent:
+            who = f"@{candidate['username']}" if candidate["username"] else f"id {candidate['chat_id']}"
+            if RECRUITER_CHAT_ID:
+                await bot.send_message(
+                    RECRUITER_CHAT_ID,
+                    f"⏰ Кандидат {who} получил тестовое задание более "
+                    f"{SILENT_CANDIDATE_HOURS} ч. назад и до сих пор не прислал результат. "
+                    f"Решение о напоминании — на ваше усмотрение.",
+                )
+            storage.mark_flagged_silent(candidate["chat_id"])
+
+
+async def main():
+    global bot
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher()
+    dp.include_router(router)
+
+    asyncio.create_task(check_silent_candidates())
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# chat_id Алины (или группы рекрутинга) — куда бот шлёт уведомления и файлы
+RECRUITER_CHAT_ID = os.getenv("RECRUITER_CHAT_ID")
+
+# Модель Claude для ведения диалога
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
+
+# Через сколько часов без ответа кандидата после отправки тестового считать его "пропавшим"
+SILENT_CANDIDATE_HOURS = int(os.getenv("SILENT_CANDIDATE_HOURS", "72"))
+
+# Как часто (в секундах) проверять базу на "пропавших" кандидатов
+SILENT_CHECK_INTERVAL_SECONDS = int(os.getenv("SILENT_CHECK_INTERVAL_SECONDS", "3600"))
+
+DB_PATH = os.getenv("DB_PATH", "candidates.db")
+
+aiogram==3.13.1
+anthropic==0.39.0
+python-dotenv==1.0.1
+
+# AI-рекрутер MOVmedia
+
+Telegram-бот, где диалог с кандидатом ведёт Claude API свободно, поверх базы
+знаний о компании, вакансиях и FAQ. Полное описание архитектуры, сценариев и
+логики — в `docs/architecture.md`. Это читать в первую очередь, если нужно
+понять, как бот "думает".
+
+## Быстрый запуск
+
+### 1. Установить зависимости
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Настроить переменные окружения
+```bash
+cp .env.example .env
+```
+Заполнить:
+- `BOT_TOKEN` — токен от @BotFather
+- `ANTHROPIC_API_KEY` — ключ Anthropic API (console.anthropic.com)
+- `RECRUITER_CHAT_ID` — chat_id Алины или группы рекрутинга (узнать через
+  @userinfobot)
+
+### 3. Запустить
+```bash
+python bot.py
+```
+
+## Структура проекта
+
+```
+knowledge/
+  company.json     — о компании, процесс найма, политика зарплат
+  vacancies.json    — вакансии, требования, условия, тестовые задания
+  faq.json          — вопрос/ответ (черновик, дополняйте свободно)
+system_prompt.py    — собирает системный промпт из knowledge/ (не трогать
+                       без необходимости — редактируйте JSON, не этот файл)
+claude_client.py    — вызовы Claude API, описание tools, цикл tool-calls
+storage.py          — sqlite: история диалога, стадия кандидата
+bot.py              — Telegram-обвязка: приём сообщений, пересылка файлов,
+                       фоновая проверка "пропавших" кандидатов
+docs/architecture.md — полное описание архитектуры и сценариев
+```
+
+## Как редактировать вакансии, тестовые и FAQ
+
+Всё в `knowledge/*.json`. Ничего в коде менять не нужно:
+
+- Добавить вакансию → новый объект в `vacancies.json`, по образцу
+  существующих. Если тестового нет — `"has_test_task": false`.
+- Изменить текст или ссылку тестового → поле `test_task` внутри вакансии.
+- Дополнить FAQ → новая пара `{"question": ..., "answer": ...}` в
+  `faq.json`.
+
+## Куда приходят уведомления
+
+Всё, что бот решает передать рекрутеру (сводка по кандидату, вопрос без
+ответа в базе, повторный запрос "соедини с рекрутером", отказ от вакансии,
+сигнал о "пропавшем" кандидате) — приходит в Telegram-чат `RECRUITER_CHAT_ID`
+отдельными сообщениями с пометкой причины. Файлы (резюме, выполненное
+тестовое) пересылаются туда же напрямую, в обход модели.
+
+## Дальнейшие возможные доработки
+См. раздел 8 в `docs/architecture.md` ("Рекомендации по масштабированию").
+
+## Про предыдущую версию (recruiter_bot)
+Ранее был собран более простой вариант на жёстком FSM-сценарии (без Claude
+API). Этот проект (`ai_recruiter_bot`) заменяет его — рекомендуется
+использовать именно этот, он гибче и ближе к исходному ТЗ.
+
+# AI-рекрутер MOVmedia — архитектура
+
+## 1. Принцип работы
+
+Диалог ведёт Claude API свободно, поверх системного промпта, в который на
+каждый ход подставляется вся база знаний (компания, вакансии, FAQ). Жёсткого
+дерева сценариев нет — модель сама решает, как вести разговор, опираясь на
+правила и данные в промпте. Технические события (передача кандидата
+рекрутеру, обновление стадии) модель инициирует через tool calls, которые
+код-обвязка исполняет напрямую в Telegram.
+
+Это отвечает на требование ТЗ: не сценарный бот с фиксированными ответами, а
+интеллектуальный ассистент, ведущий естественный диалог.
+
+## 2. User Flow
+
+```
+/start
+  │
+  ▼
+Приветствие + краткое "о компании" + ссылка на сайт
+  │
+  ▼
+"На какую вакансию откликаетесь?" ←──────────────┐
+  │                                                │
+  ├─ кандидат называет вакансию сразу               │
+  ├─ кандидат сначала спрашивает о компании ─────────┘ (отвечает, потом
+  │                                                       возвращается к вопросу)
+  ├─ кандидат сразу просит тестовое → уточняет вакансию, если не указана,
+  │   и выдаёт тестовое сразу, без лишних вопросов
+  │
+  ▼
+Краткая карточка вакансии (обязанности/требования/условия)
+  │
+  ▼
+Сбор анкеты: имя, резюме (файл/ссылка), телефон
+  (порядок гибкий — подстраивается под то, как отвечает кандидат)
+  │
+  ├─ вакансия БЕЗ тестового (Project-менеджер) ──────┐
+  │                                                    │
+  ▼ вакансия С тестовым (PR-менеджер)                  │
+Выдача тестового (ссылка + объяснение критериев        │
+и политики сроков)                                     │
+  │                                                    │
+  ▼                                                    │
+Приём выполненного тестового                           │
+  │                                                    │
+  └────────────────────────────────────────────────────┘
+  │
+  ▼
+Финальная сводка → notify_recruiter(candidate_summary) → Алине
+  │
+  ▼
+Прощание, следующие шаги, "будем рады работать вместе"
+```
+
+Параллельно в любой момент диалога кандидат может:
+- задавать вопросы о компании/вакансии/процессе → отвечает по базе знаний,
+  либо честно говорит "не знаю точно" и эскалирует;
+- просить прямой контакт с рекрутером → после 2-го запроса эскалирует и
+  сообщает срок ответа;
+- сообщить, что передумал → вежливое завершение + уведомление рекрутеру;
+- пропасть на несколько дней после получения тестового → отслеживается
+  фоновым процессом, не самим диалогом.
+
+## 3. Сценарии кандидата и логика бота
+
+| Сценарий | Поведение бота |
+|---|---|
+| Сразу хочет тестовое | Уточняет вакансию, если не названа, и выдаёт тестовое без промежуточных вопросов |
+| Сначала хочет узнать о компании | Рассказывает по `company.json`, затем мягко возвращается к вопросу о вакансии |
+| Вопрос по вакансии | Отвечает по данным конкретной вакансии в `vacancies.json` |
+| Вопрос про зарплату | Объясняет политику вилки (`salary_policy`) и спрашивает ожидания кандидата |
+| Вопрос про команду/руководителя | Отвечает тем, что есть в базе (сейчас минимально); если данных нет — честно говорит и эскалирует вопрос |
+| Вопрос про карьерный рост | Отвечает по `conditions` вакансии, если там есть релевантный пункт |
+| Просит перенести срок тестового | Ссылается на `deadline_policy` — гибко, но с пометкой, что вакансию закрывают в ближайшее время |
+| Прислал тестовое | Подтверждает получение, вызывает `update_candidate_stage("test_task_submitted")`, объясняет следующие шаги, вызывает `notify_recruiter(candidate_summary)` |
+| Пропал на несколько дней | Не отслеживается диалогом — см. раздел 5, фоновая проверка |
+| Передумал | Вежливо прощается, вызывает `notify_recruiter(withdrawal)`, помечает стадию `withdrawn` |
+| 2+ раза просит связать с рекрутером напрямую | Сообщает, что информация уже передана и рекрутер свяжется в течение рабочих суток, вызывает `notify_recruiter(connect_request)` |
+| Задаёт вопрос не по теме (посторонний) | Вежливо просит оставаться в профессиональных рамках, напоминает, что является ассистентом для первичного контакта |
+| Вопрос, на который нет точного ответа в базе | Честно говорит, что уточнит, сохраняет вопрос дословно, вызывает `notify_recruiter(unknown_question)` — никогда не придумывает ответ |
+
+## 4. Состояния кандидата
+
+Хранятся в SQLite (`storage.py`), одна запись на `chat_id` Telegram:
+
+- `history` — полная история сообщений для контекста Claude (включая
+  tool-calls и их результаты)
+- `stage` — техническая стадия: `new → test_task_sent → test_task_submitted`
+  либо `withdrawn`. Обновляется только по явному вызову модели
+  `update_candidate_stage`
+- `stage_updated_at` — время последнего изменения стадии, используется для
+  обнаружения "пропавших" кандидатов
+- `flagged_silent` — чтобы не уведомлять рекрутера об одном и том же
+  молчащем кандидате повторно
+
+Переходы между стадиями не жёстко закодированы в Python — их инициирует
+модель по ходу диалога, опираясь на инструкции в системном промпте. Это и
+даёт гибкость для новых сценариев без переписывания кода.
+
+## 5. Обработка "пропавших" кандидатов
+
+Поскольку модель реагирует только на входящие сообщения и не может сама
+инициировать действия по таймеру, эта логика вынесена в фоновую задачу
+`check_silent_candidates()` в `bot.py`:
+
+- раз в `SILENT_CHECK_INTERVAL_SECONDS` (по умолчанию раз в час) проверяет
+  всех кандидатов в стадии `test_task_sent`;
+- если с момента `stage_updated_at` прошло больше `SILENT_CANDIDATE_HOURS`
+  (по умолчанию 72 часа = 3 рабочих дня) — уведомляет рекрутера;
+- решение, напоминать ли кандидату, остаётся за рекрутером — бот сам
+  кандидату не пишет.
+
+## 6. Структура базы знаний
+
+Три JSON-файла в `knowledge/`, полностью независимые от кода:
+
+- `company.json` — сайт, позиционирование, клиенты, политика зарплат,
+  процесс найма, имя рекрутера
+- `vacancies.json` — по одному объекту на вакансию: описание, обязанности,
+  требования, условия, `has_test_task` и (если true) блок `test_task` с
+  типом выдачи, ссылкой, критериями оценки и политикой сроков
+- `faq.json` — список вопрос/ответ
+
+`system_prompt.py` на каждый вызов собирает из этих файлов один системный
+промпт. Чтобы добавить вакансию, изменить FAQ или обновить тестовое —
+достаточно отредактировать нужный JSON. Код бота и Claude-клиента менять не
+нужно.
+
+## 7. Логика передачи кандидата HR
+
+Модель никогда не отправляет сообщения Алине напрямую — она только
+формулирует текст и вызывает инструмент `notify_recruiter(reason, message)`.
+Код-обвязка (`bot.py`) получает этот вызов и реально отправляет сообщение в
+`RECRUITER_CHAT_ID` через Telegram Bot API. Так исключается риск, что модель
+"придумает" отправку, которой не было — вызов инструмента детерминирован и
+проверяем.
+
+Файлы (резюме, выполненное тестовое) обрабатываются отдельно от модели: как
+только Telegram-сообщение содержит `document` или `photo`, `bot.py`
+немедленно и напрямую пересылает его в `RECRUITER_CHAT_ID`, независимо от
+того, что в этот момент "думает" модель. Это гарантирует, что файл дойдёт
+до рекрутера, даже если диалоговая логика даст сбой.
+
+## 8. Рекомендации по масштабированию
+
+- **Новые вакансии** — добавить объект в `vacancies.json`. Если у вакансии
+  нет тестового — оставить `has_test_task: false`.
+- **Новые тестовые задания** — сейчас поддержан только тип `link` (ссылка на
+  Notion). Для файловых тестовых можно добавить `delivery_type: "file"` и
+  расширить `system_prompt.py` инструкцией, как их выдавать (например, через
+  `bot.send_document` по file_id, сохранённому в knowledge).
+- **Расширение FAQ** — просто дописывать пары вопрос/ответ в `faq.json`.
+- **Подключение внутренних документов** (регламенты, тон-оф-войс и т.п.) —
+  добавить их как ещё один JSON/markdown в `knowledge/` и включить в сборку
+  промпта в `system_prompt.py` тем же способом, что и текущие три файла.
+- **Более сложная эскалация** (например, разным рекрутерам под разные
+  вакансии) — добавить в `vacancies.json` поле `recruiter_chat_id` и
+  использовать его вместо единого `RECRUITER_CHAT_ID` в `notify_recruiter`.
+- **Рост нагрузки** — при заметном объёме кандидатов стоит вынести
+  `check_silent_candidates` и рассылку уведомлений в отдельный процесс/воркер,
+  а SQLite заменить на Postgres, чтобы не блокировать основной бот на записи.
+- **Отслеживание качества диалогов** — сейчас вся история хранится в
+  `candidates.db` в открытом виде, её удобно выгружать для ревью, как
+  проходят отклики, и дорабатывать системный промпт по реальным кейсам.
+
+## 9. Ограничения текущей версии
+
+- Не отслеживается автоматически "сколько раз кандидат просил рекрутера" —
+  модель определяет это из полной истории диалога, которую видит на каждом
+  ходу; это надёжно при разумной длине диалога, но с очень длинными
+  диалогами имеет смысл периодически суммаризировать историю.
+- Нет очереди/ретраев на случай сбоя Telegram API при отправке уведомления
+  рекрутеру — для продакшена стоит добавить повторные попытки и логирование
+  неудачных отправок.
+- Один Telegram-бот = один процесс с polling. Для нескольких вакансий с
+  разными рекрутерами или высокой нагрузкой лучше перейти на webhook-режим.
+
+import asyncio
+import logging
+
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+from config import BOT_TOKEN, RECRUITER_CHAT_ID
+from vacancies import FAQ, VACANCIES
+
+logging.basicConfig(level=logging.INFO)
+router = Router()
+
+
+# ---------- Состояния анкеты ----------
+class Form(StatesGroup):
+    waiting_name = State()
+    answering_question = State()
+    waiting_resume = State()
+    waiting_contact = State()
+    waiting_test_answer = State()
+
+
+# ---------- Клавиатуры ----------
+def main_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Вакансии", callback_data="menu_vacancies")],
+            [InlineKeyboardButton(text="❓ FAQ", callback_data="menu_faq")],
+        ]
+    )
+
+
+def vacancies_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text=v["title"], callback_data=f"vac_{vid}")]
+        for vid, v in VACANCIES.items()
+    ]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def vacancy_card_kb(vacancy_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Откликнуться", callback_data=f"apply_{vacancy_id}")],
+            [InlineKeyboardButton(text="⬅️ К списку вакансий", callback_data="menu_vacancies")],
+        ]
+    )
+
+
+def faq_kb() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text=q, callback_data=f"faq_{i}")]
+        for i, q in enumerate(FAQ.keys())
+    ]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ---------- Старт и главное меню ----------
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Здравствуйте! Я бот-помощник по подбору персонала.\n\n"
+        "Здесь можно посмотреть открытые вакансии, откликнуться и пройти "
+        "короткий скрининг с тестовым заданием.",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.callback_query(F.data == "menu_main")
+async def show_main_menu(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Главное меню:", reply_markup=main_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu_vacancies")
+async def show_vacancies(callback: CallbackQuery):
+    await callback.message.edit_text("Открытые вакансии:", reply_markup=vacancies_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("vac_"))
+async def show_vacancy_card(callback: CallbackQuery):
+    vacancy_id = callback.data.removeprefix("vac_")
+    vacancy = VACANCIES[vacancy_id]
+    text = f"<b>{vacancy['title']}</b>\n\n{vacancy['description']}"
+    await callback.message.edit_text(
+        text, reply_markup=vacancy_card_kb(vacancy_id), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ---------- FAQ ----------
+@router.callback_query(F.data == "menu_faq")
+async def show_faq_menu(callback: CallbackQuery):
+    await callback.message.edit_text("Часто задаваемые вопросы:", reply_markup=faq_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("faq_"))
+async def show_faq_answer(callback: CallbackQuery):
+    index = int(callback.data.removeprefix("faq_"))
+    question = list(FAQ.keys())[index]
+    answer = FAQ[question]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад к FAQ", callback_data="menu_faq")]]
+    )
+    await callback.message.edit_text(f"<b>{question}</b>\n\n{answer}", reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+# ---------- Отклик на вакансию ----------
+@router.callback_query(F.data.startswith("apply_"))
+async def start_application(callback: CallbackQuery, state: FSMContext):
+    vacancy_id = callback.data.removeprefix("apply_")
+    await state.update_data(
+        vacancy_id=vacancy_id,
+        question_index=0,
+        answers=[],
+    )
+    await state.set_state(Form.waiting_name)
+    await callback.message.answer("Отлично! Для начала, как вас зовут?")
+    await callback.answer()
+
+
+@router.message(Form.waiting_name)
+async def get_name(message: Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await ask_next_question(message, state)
+
+
+async def ask_next_question(message: Message, state: FSMContext):
+    data = await state.get_data()
+    vacancy = VACANCIES[data["vacancy_id"]]
+    idx = data["question_index"]
+
+    if idx < len(vacancy["questions"]):
+        await state.set_state(Form.answering_question)
+        await message.answer(vacancy["questions"][idx])
+    else:
+        await state.set_state(Form.waiting_resume)
+        await message.answer(
+            "Спасибо! Теперь пришлите, пожалуйста, резюме — файлом (PDF/DOCX) "
+            "или ссылкой (например, на hh.ru)."
+        )
+
+
+@router.message(Form.answering_question)
+async def get_answer(message: Message, state: FSMContext):
+    data = await state.get_data()
+    answers = data["answers"]
+    answers.append(message.text)
+    await state.update_data(answers=answers, question_index=data["question_index"] + 1)
+    await ask_next_question(message, state)
+
+
+@router.message(Form.waiting_resume, F.document | F.text)
+async def get_resume(message: Message, state: FSMContext):
+    if message.document:
+        await state.update_data(resume_file_id=message.document.file_id, resume_text=None)
+    else:
+        await state.update_data(resume_file_id=None, resume_text=message.text)
+
+    await state.set_state(Form.waiting_contact)
+    await message.answer("Принято. И последнее — оставьте, пожалуйста, номер телефона для связи.")
+
+
+@router.message(Form.waiting_contact)
+async def get_contact(message: Message, state: FSMContext):
+    contact = message.contact.phone_number if message.contact else message.text
+    await state.update_data(contact=contact)
+    await state.set_state(Form.waiting_test_answer)
+
+    data = await state.get_data()
+    vacancy = VACANCIES[data["vacancy_id"]]
+    await message.answer(
+        "Спасибо! Последний шаг — небольшое тестовое задание.\n\n" + vacancy["test_task"]
+    )
+
+
+@router.message(Form.waiting_test_answer, F.document | F.photo | F.text)
+async def get_test_answer(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    vacancy = VACANCIES[data["vacancy_id"]]
+
+    # Собираем сводку по кандидату
+    qa_lines = "\n".join(
+        f"— {q}\n   {a}" for q, a in zip(vacancy["questions"], data["answers"])
+    )
+    resume_line = (
+        "прикреплён файл (см. следующее сообщение)"
+        if data.get("resume_file_id")
+        else data.get("resume_text", "—")
+    )
+
+    summary = (
+        f"📥 <b>Новый кандидат</b>\n"
+        f"Вакансия: {vacancy['title']}\n"
+        f"Имя: {data.get('name')}\n"
+        f"Telegram: @{message.from_user.username or '—'} (id {message.from_user.id})\n"
+        f"Телефон: {data.get('contact')}\n\n"
+        f"<b>Ответы на вопросы:</b>\n{qa_lines}\n\n"
+        f"<b>Резюме:</b> {resume_line}\n\n"
+        f"<b>Тестовое задание:</b> "
+        + ("см. приложенный файл ниже" if (message.document or message.photo) else message.text)
+    )
+
+    if RECRUITER_CHAT_ID:
+        await bot.send_message(RECRUITER_CHAT_ID, summary, parse_mode="HTML")
+
+        # Пересылаем файл резюме, если он был приложен
+        if data.get("resume_file_id"):
+            await bot.send_document(RECRUITER_CHAT_ID, data["resume_file_id"], caption="Резюме кандидата")
+
+        # Пересылаем тестовое задание, если это файл/фото
+        if message.document:
+            await bot.send_document(RECRUITER_CHAT_ID, message.document.file_id, caption="Тестовое задание")
+        elif message.photo:
+            await bot.send_photo(RECRUITER_CHAT_ID, message.photo[-1].file_id, caption="Тестовое задание")
+    else:
+        logging.warning("RECRUITER_CHAT_ID не задан — сообщение рекрутеру не отправлено")
+
+    await message.answer(
+        "Спасибо! Ваша анкета и тестовое задание переданы рекрутеру. "
+        "С вами свяжутся в ближайшее время."
+    )
+    await state.clear()
+
+
+# ---------- Запуск ----------
+async def main():
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+import anthropic
+
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from system_prompt import build_system_prompt
+
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+TOOLS = [
+    {
+        "name": "notify_recruiter",
+        "description": (
+            "Отправить рекрутеру Алине сообщение о кандидате. Используй это, когда: "
+            "(a) кандидат прислал всё необходимое (вакансия, имя, резюме, телефон, "
+            "тестовое если применимо) — пришли полную сводку по кандидату; "
+            "(b) кандидат задал вопрос, точного ответа на который нет в базе знаний — "
+            "передай вопрос дословно; "
+            "(c) кандидат уже второй раз и более просит связать напрямую с рекрутером; "
+            "(d) кандидат явно сообщил, что передумал проходить отбор."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "candidate_summary",
+                        "unknown_question",
+                        "connect_request",
+                        "withdrawal",
+                    ],
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Текст сообщения рекрутеру — понятный, структурированный, на русском.",
+                },
+            },
+            "required": ["reason", "message"],
+        },
+    },
+    {
+        "name": "update_candidate_stage",
+        "description": (
+            "Обновить внутреннюю стадию кандидата для технического отслеживания "
+            "прогресса. Кандидат не видит этот вызов."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stage": {
+                    "type": "string",
+                    "enum": ["test_task_sent", "test_task_submitted", "withdrawn"],
+                }
+            },
+            "required": ["stage"],
+        },
+    },
+]
+
+
+def run_turn(history: list, tool_executor) -> tuple[str, list]:
+    """
+    Прогоняет один ход диалога: вызывает Claude, при необходимости выполняет
+    tool-calls через tool_executor(name, input) -> str, и возвращает
+    (финальный текст для кандидата, обновлённая история сообщений).
+    """
+    system_prompt = build_system_prompt()
+    messages = list(history)
+
+    while True:
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=system_prompt,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        assistant_content = [block.model_dump() for block in response.content]
+        messages.append({"role": "assistant", "content": assistant_content})
+
+        if response.stop_reason != "tool_use":
+            final_text = "".join(
+                block.text for block in response.content if block.type == "text"
+            )
+            return final_text, messages
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result_text = tool_executor(block.name, block.input)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    }
+                )
+        messages.append({"role": "user", "content": tool_results})
+
+{
+  "name": "MOVmedia",
+  "assistant_name": "AIHRinMOVmedia",
+  "site": "https://movmedia.ru/",
+  "founded": "2018",
+  "team_format": "полностью распределённая команда",
+  "positioning": "Студия информационного дизайна MOVmedia, на рынке с 2018 года. Работаем с крупными клиентами и делаем всевозможные проекты для крупного бизнеса.",
+  "about": "Мы — MOVmedia, студия информационного дизайна. Помогаем крупным компаниям выделять главное, структурировать сложное и представлять информацию ярко, понятно и без потери смысла. Создаём инфографику (не имеющую отношения к маркетплейсам), оформляем бизнес-презентации, делаем видео и интерактивные проекты. Нас вдохновляет, когда финальный продукт не только визуально впечатляет, но и решает реальные задачи бизнеса.",
+  "clients_examples": ["Газпром", "Сбер", "РЖД", "Газпром нефть", "X5 Retail Group", "Магнит"],
+  "recruiter": {
+    "name": "Алина",
+    "telegram": "@alisha_astaeva",
+    "role": "рекрутер",
+    "response_time_between_stages": "обычно не более 3 рабочих дней между этапами"
+  },
+  "hiring_process_steps": [
+    "Анкета и (если предусмотрено вакансией) тестовое задание в этом чате",
+    "Проверка ответов/тестового рекрутером или HRD",
+    "Интервью с рекрутером или HRD — около 1 часа, в Zoom",
+    "Интервью с непосредственным руководителем — около 1,5 часов"
+  ],
+  "salary_policy": "Точных вилок не называем. Отталкиваемся от ожиданий кандидата и стараемся приблизиться к ним, если решаем делать оффер. Нужно спросить кандидата, на какие цифры он ориентируется — на старте и в целом."
+}
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Токен бота, полученный от @BotFather
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+# Telegram chat_id рекрутера (или группы), куда будут приходить анкеты и тестовые
+# Узнать свой chat_id можно, написав боту @userinfobot
+RECRUITER_CHAT_ID = os.getenv("RECRUITER_CHAT_ID")
