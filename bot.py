@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 import storage
-from gemini_client import run_turn
+from gigachat_client import run_turn
 from config import (
     BOT_TOKEN,
     RECRUITER_CHAT_ID,
