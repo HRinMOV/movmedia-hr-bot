@@ -4,13 +4,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # chat_id Алины (или группы рекрутинга) — куда бот шлёт уведомления и файлы
 RECRUITER_CHAT_ID = os.getenv("RECRUITER_CHAT_ID")
 
-# Модель Claude для ведения диалога
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
+# Модель Gemini для ведения диалога (бесплатный тариф Google AI Studio)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Через сколько часов без ответа кандидата после отправки тестового считать его "пропавшим"
 SILENT_CANDIDATE_HOURS = int(os.getenv("SILENT_CANDIDATE_HOURS", "72"))
