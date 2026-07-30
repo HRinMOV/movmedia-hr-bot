@@ -10,7 +10,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RECRUITER_CHAT_ID = os.getenv("RECRUITER_CHAT_ID")
 
 # Модель Gemini для ведения диалога (бесплатный тариф Google AI Studio)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 # Через сколько часов без ответа кандидата после отправки тестового считать его "пропавшим"
 SILENT_CANDIDATE_HOURS = int(os.getenv("SILENT_CANDIDATE_HOURS", "72"))
