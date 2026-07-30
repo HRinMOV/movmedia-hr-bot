@@ -137,5 +137,16 @@ async def main():
     await dp.start_polling(bot, handle_signals=False)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+async def run_forever():
+    # Держит бота в одном event loop; retry делаем через while,
+    # а не через новый asyncio.run(), чтобы не плодить event loop-ы.
+    while True:
+        try:
+            await main()
+        except Exception:
+            logging.exception("Бот упал с ошибкой, перезапуск через 5 секунд...")
+            await asyncio.sleep(5)
+
+
+ if __name__ == "__main__":
+    asyncio.run(run_forever())
