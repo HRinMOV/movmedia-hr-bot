@@ -148,5 +148,5 @@ async def run_forever():
             await asyncio.sleep(5)
 
 
- if __name__ == "__main__":
+if __name__ == "__main__":
     asyncio.run(run_forever())
