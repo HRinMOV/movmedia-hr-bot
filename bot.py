@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 import storage
-from claude_client import run_turn
+from gemini_client import run_turn
 from config import (
     BOT_TOKEN,
     RECRUITER_CHAT_ID,
@@ -122,11 +122,12 @@ async def check_silent_candidates():
                     f"{SILENT_CANDIDATE_HOURS} ч. назад и до сих пор не прислал результат. "
                     f"Решение о напоминании — на ваше усмотрение.",
                 )
-            storage.mark_flagged_silent(candidate["chat_id"])
+                storage.mark_flagged_silent(candidate["chat_id"])
 
 
 dp = Dispatcher()
 dp.include_router(router)
+
 
 async def main():
     global bot
