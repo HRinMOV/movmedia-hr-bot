@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import threading
-import time
 
 from flask import Flask
 
@@ -14,12 +13,7 @@ _lock = threading.Lock()
 
 
 def _run_bot_forever():
-    while True:
-        try:
-            asyncio.run(bot_module.main())
-        except Exception as e:
-            logging.error(f"Бот упал с ошибкой: {e}. Перезапуск через 5 секунд...")
-            time.sleep(5)
+    asyncio.run(bot_module.run_forever())
 
 
 def start_bot_once():
