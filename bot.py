@@ -95,8 +95,8 @@ async def handle_text(message: Message):
 async def process_text_turn(message: Message, username: str | None, user_text: str):
     candidate = storage.get_or_create(message.chat.id, username)
     history = candidate["history"]
-        history.append({"type": "user_input", "content": [{"type": "text", "text": user_text}]})
-
+    history.append({"type": "user_input", "content": [{"type": "text", "text": user_text}]})
+    
     executor = make_tool_executor(message.chat.id, username)
     reply_text, updated_history = run_turn(history, executor)
 
