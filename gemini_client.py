@@ -1,12 +1,13 @@
-import google.generativeai as genai
+from google import genai
 
 from config import GEMINI_API_KEY, GEMINI_MODEL
 from system_prompt import build_system_prompt
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 TOOLS = [
     {
+        "type": "function",
         "name": "notify_recruiter",
         "description": (
             "Отправить рекрутеру Алине сообщение о кандидате. Используй это, когда: "
@@ -38,6 +39,7 @@ TOOLS = [
         },
     },
     {
+        "type": "function",
         "name": "update_candidate_stage",
         "description": (
             "Обновить внутреннюю стадию кандидата для технического отслеживания "
@@ -57,73 +59,47 @@ TOOLS = [
 ]
 
 
-def _to_gemini_role(role: str) -> str:
-    return "model" if role == "assistant" else "user"
-
-
-def _history_to_contents(history: list) -> list:
-    """Приводит внутреннюю историю диалога к формату contents для Gemini API."""
-    contents = []
-    for message in history:
-        contents.append({
-            "role": _to_gemini_role(message["role"]),
-            "parts": message["content"],
-        })
-    return contents
-
-
-def _part_to_content(part) -> dict:
-    if getattr(part, "text", None):
-        return {"text": part.text}
-    if getattr(part, "function_call", None):
-        return {
-            "function_call": {
-                "name": part.function_call.name,
-                "args": dict(part.function_call.args),
-            }
-        }
-    return {"text": ""}
+def _text_from_steps(steps) -> str:
+    """Собирает финальный текст ответа модели из шагов взаимодействия."""
+    chunks = []
+    for step in steps:
+        if getattr(step, "type", None) == "model_output":
+            for block in step.content or []:
+                if getattr(block, "type", None) == "text":
+                    chunks.append(block.text)
+    return "".join(chunks)
 
 
 def run_turn(history: list, tool_executor) -> tuple[str, list]:
     """
-    Прогоняет один ход диалога: вызывает Gemini, при необходимости выполняет
-    tool-calls через tool_executor(name, input) -> str, и возвращает
-    (финальный текст для кандидата, обновлённая история сообщений).
+    Прогоняет один ход диалога: вызывает Gemini через Interactions API,
+    при необходимости выполняет tool-calls через tool_executor(name, input) -> str,
+    и возвращает (финальный текст для кандидата, обновлённая история шагов).
     """
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        system_instruction=build_system_prompt(),
-        tools=[{"function_declarations": TOOLS}],
-    )
-
     messages = list(history)
 
     while True:
-        response = model.generate_content(_history_to_contents(messages))
-        parts = response.candidates[0].content.parts
+        interaction = client.interactions.create(
+            model=GEMINI_MODEL,
+            system_instruction=build_system_prompt(),
+            input=messages,
+            tools=TOOLS,
+            store=False,
+        )
 
-        messages.append({
-            "role": "assistant",
-            "content": [_part_to_content(part) for part in parts],
-        })
+        for step in interaction.steps:
+            messages.append(step.model_dump())
 
-        function_calls = [part.function_call for part in parts if getattr(part, "function_call", None)]
+        function_calls = [s for s in interaction.steps if s.type == "function_call"]
 
         if not function_calls:
-            final_text = "".join(part.text for part in parts if getattr(part, "text", None))
-            return final_text, messages
+            return _text_from_steps(interaction.steps), messages
 
-        tool_response_parts = []
-        for part in parts:
-            if getattr(part, "function_call", None):
-                fc = part.function_call
-                result_text = tool_executor(fc.name, dict(fc.args))
-                tool_response_parts.append({
-                    "function_response": {
-                        "name": fc.name,
-                        "response": {"content": result_text},
-                    }
-                })
-
-        messages.append({"role": "user", "content": tool_response_parts})
+        for fc in function_calls:
+            result_text = tool_executor(fc.name, dict(fc.arguments))
+            messages.append({
+                "type": "function_result",
+                "name": fc.name,
+                "call_id": fc.id,
+                "result": [{"type": "text", "text": result_text}],
+            })
