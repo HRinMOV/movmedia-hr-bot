@@ -1,5 +1,5 @@
 aiogram>=3.4
-anthropic>=0.39
+google-generativeai>=0.8
 flask>=3.0
 gunicorn>=21.2
 python-dotenv>=1.0
