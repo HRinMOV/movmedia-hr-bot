@@ -107,8 +107,8 @@ def _history_to_messages(history: list) -> list:
                 "functions_state_id": item.get("functions_state_id", ""),
             })
         elif item_type == "function_result":
-            messages.append({"role": "function", "content": item.get("result", "")})
-    return messages
+            messages.append({"role": "function", "content": item.get("result", ""), "name": item.get("name", "")})
+            return messages
 
 
 def run_turn(history: list, tool_executor) -> tuple[str, list]:
@@ -158,4 +158,4 @@ def run_turn(history: list, tool_executor) -> tuple[str, list]:
         })
 
         result_text = tool_executor(function_call["name"], arguments)
-        updated_history.append({"type": "function_result", "result": result_text})
+        updated_history.append({"type": "function_result", "result": result_text, "name": function_call["name"]})
