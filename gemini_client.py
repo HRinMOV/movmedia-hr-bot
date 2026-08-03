@@ -34,6 +34,9 @@ def _request_with_retry(method, url, **kwargs):
             return response
         except requests.exceptions.RequestException as exc:
             last_exc = exc
+            body = getattr(exc.response, "text", None)
+            if body:
+                logger.warning("Тело ответа Gemini: %s", body[:1000])
             logger.warning(
                 "Запрос к Gemini (%s) не удался, попытка %s/%s: %s",
                 url, attempt, RETRY_ATTEMPTS, exc,
