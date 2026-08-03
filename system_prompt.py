@@ -46,6 +46,14 @@ def get_vacancy_section(name: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def get_company_overview_text() -> str:
+    """Полный текст knowledge/company.md — используется в bot.py для раздела
+    «О MOVmedia» в главном меню, без обращения к модели. Единственный источник
+    правды остаётся knowledge/company.md — редактируется только .md-файлом.
+    """
+    return _load_text("company.md")
+
+
 _PROFILE_LABELS = {
     "name": "Имя",
     "vacancy": "Вакансия",
