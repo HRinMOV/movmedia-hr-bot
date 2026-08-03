@@ -7,11 +7,12 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 import storage
-from gigachat_client import GigaChatError, run_turn
+from gemini_client import GeminiError, run_turn
 from system_prompt import known_test_task_links
 from config import (
     BOT_TOKEN,
     RECRUITER_CHAT_ID,
+    PROXY_URL,
     SILENT_CANDIDATE_HOURS,
     SILENT_CHECK_INTERVAL_SECONDS,
 )
@@ -99,7 +100,7 @@ def make_tool_executor(chat_id: int, username: str | None):
 async def run_and_reply(message: Message, candidate: dict, history: list, executor) -> None:
     """Обращается к AI и гарантирует, что кандидат получит ответ.
 
-    Повторные попытки уже сделаны внутри run_turn (gigachat_client). Если
+    Повторные попытки уже сделаны внутри run_turn (gemini_client). Если
     все попытки исчерпаны — не оставляем кандидата в тишине, а отвечаем
     вежливым fallback-сообщением и уведомляем рекрутера о сбое."""
     chat_id = message.chat.id
@@ -111,9 +112,9 @@ async def run_and_reply(message: Message, candidate: dict, history: list, execut
     }
 
     try:
-        logger.info("Отправка запроса в GigaChat chat_id=%s", chat_id)
+        logger.info("Отправка запроса в Gemini chat_id=%s", chat_id)
         reply_text, updated_history = run_turn(history, executor, profile)
-    except GigaChatError:
+    except GeminiError:
         logger.error("AI недоступен после всех попыток, использую fallback chat_id=%s", chat_id)
         storage.save_history(chat_id, history)
         if RECRUITER_CHAT_ID:
@@ -261,7 +262,7 @@ dp.include_router(router)
 
 async def main():
     global bot
-    session = AiohttpSession(timeout=60)
+    session = AiohttpSession(timeout=60, proxy=PROXY_URL)
     bot = Bot(token=BOT_TOKEN, session=session)
 
     asyncio.create_task(check_silent_candidates())
