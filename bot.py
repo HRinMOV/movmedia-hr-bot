@@ -76,6 +76,83 @@ CANDIDATE_REMINDER_TEXT = (
     "благодарен за обратную связь."
 )
 
+# Короткие детерминированные ответы для интерактивного подменю «О MOVmedia».
+# Не связаны напрямую с company.md: здесь нет служебных полей (имя ассистента,
+# сайт, рекрутер, зарплатная политика, дата основания) — только то, что можно
+# показывать кандидату в диалоге.
+ABOUT_MENU_TEXT = (
+    "🩵 О MOVmedia\n\n"
+    "Здесь вы можете узнать больше о нашей компании, культуре и подходе к работе.\n\n"
+    "Что вас интересует?"
+)
+
+ABOUT_COMPANY_TEXT = (
+    "MOVmedia — студия информационного дизайна, которая помогает крупным "
+    "компаниям превращать сложную информацию в понятные и визуально сильные "
+    "решения.\n\n"
+    "Мы создаём бизнес-презентации, инфографику, видеоролики, интерактивные "
+    "проекты и другие коммуникационные материалы для крупного бизнеса.\n\n"
+    "Среди наших клиентов — Газпром, Сбер, РЖД, X5 Group, Магнит и другие "
+    "крупные компании.\n\n"
+    "Если хотите, могу рассказать о нашей культуре или показать открытые вакансии."
+)
+
+ABOUT_CULTURE_TEXT = (
+    "В MOVmedia мы ценим ответственность, инициативность, осознанность и "
+    "стремление к развитию.\n\n"
+    "Мы строим отношения внутри команды на доверии, партнёрстве и взаимной "
+    "ответственности.\n\n"
+    "Нам близок подход win-win — когда сотрудники помогают развивать компанию, "
+    "а компания создаёт условия для профессионального роста сотрудников.\n\n"
+    "Хотите узнать, какой человек обычно чувствует себя комфортно в нашей команде?"
+)
+
+ABOUT_WHY_TEXT = (
+    "Многие сотрудники выбирают MOVmedia потому что здесь можно:\n\n"
+    "• работать полностью удалённо;\n"
+    "• участвовать в крупных B2B-проектах;\n"
+    "• предлагать собственные идеи;\n"
+    "• влиять на процессы;\n"
+    "• профессионально развиваться вместе с командой."
+)
+
+ABOUT_TEAM_TEXT = (
+    "Мы придерживаемся партнёрского стиля взаимодействия.\n\n"
+    "Руководители помогают сотрудникам принимать решения самостоятельно, а не "
+    "решают задачи за них.\n\n"
+    "Мы поддерживаем инициативу, открытый диалог и конструктивную обратную связь.\n\n"
+    "Нам важно, чтобы каждый понимал влияние своей работы на общий результат команды."
+)
+
+ABOUT_SECTION_TEXTS = {
+    "company": ABOUT_COMPANY_TEXT,
+    "culture": ABOUT_CULTURE_TEXT,
+    "why": ABOUT_WHY_TEXT,
+    "team": ABOUT_TEAM_TEXT,
+}
+
+# Ключевые слова для автоматического открытия раздела по свободному тексту
+# кандидата, без показа всего меню (например: «какая у вас культура?»).
+_ABOUT_SECTION_KEYWORDS = {
+    "culture": ["культур", "ценност"],
+    "why": ["почему выбирают", "почему стоит", "почему movmedia", "почему у вас", "преимущества компании", "плюсы работы"],
+    "team": ["работа в команде", "стиль управления", "взаимодействи", "руководител", "команда movmedia"],
+    "company": ["чем занимается", "чем занимаетесь", "о компании", "про компанию", "что за компания", "расскажи о movmedia", "расскажите о movmedia", "какие у вас клиенты", "какая у вас студия"],
+}
+
+
+def detect_about_section(text: str) -> str | None:
+    """Определяет, какой раздел подменю «О MOVmedia» соответствует свободному
+    тексту кандидата (например, «какая у вас культура?»), чтобы открыть его
+    сразу, не показывая кандидату всё меню целиком."""
+    lowered = text.lower()
+    for section, keywords in _ABOUT_SECTION_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in lowered:
+                return section
+    return None
+
+
 TYPING_REFRESH_SECONDS = 4  # Telegram показывает статус "печатает..." около 5 секунд, обновляем чуть чаще
 
 _active_ai_requests = 0
@@ -133,6 +210,22 @@ def skip_keyboard(field: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пропустить", callback_data=f"reserve_skip:{field}")],
         [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="menu:root")],
+    ])
+
+
+def about_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏢 О компании", callback_data="about:company")],
+        [InlineKeyboardButton(text="🤝 Культура и ценности", callback_data="about:culture")],
+        [InlineKeyboardButton(text="🚀 Почему выбирают MOVmedia", callback_data="about:why")],
+        [InlineKeyboardButton(text="👥 Работа в команде", callback_data="about:team")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:root")],
+    ])
+
+
+def about_section_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:about")],
     ])
 
 
@@ -348,11 +441,29 @@ async def cb_menu_root(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "menu:about")
 async def cb_menu_about(callback: CallbackQuery, state: FSMContext):
-    text = system_prompt.get_company_overview_text()
+    """Показывает интерактивное подменю «О MOVmedia» с коротким приветствием —
+    вместо вывода всей базы знаний целиком."""
     try:
-        await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard())
+        await callback.message.edit_text(ABOUT_MENU_TEXT, reply_markup=about_menu_keyboard())
     except Exception:
-        await callback.message.answer(text, reply_markup=back_to_menu_keyboard())
+        await callback.message.answer(ABOUT_MENU_TEXT, reply_markup=about_menu_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("about:"))
+async def cb_about_section(callback: CallbackQuery, state: FSMContext):
+    """Открывает один из 4 коротких разделов подменю «О MOVmedia» (см.
+    ABOUT_SECTION_TEXTS) — короткий, готовый к чтению в Telegram ответ,
+    без служебных полей и без дампа knowledge/company.md."""
+    section = callback.data.split("about:", 1)[1]
+    text = ABOUT_SECTION_TEXTS.get(section)
+    if not text:
+        await callback.answer()
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=about_section_keyboard())
+    except Exception:
+        await callback.message.answer(text, reply_markup=about_section_keyboard())
     await callback.answer()
 
 
@@ -598,6 +709,20 @@ async def handle_file(message: Message):
 
 @router.message(F.text)
 async def handle_text(message: Message):
+    """Если кандидат в свободной форме спрашивает про компанию/культуру/команду —
+    сразу открываем соответствующий короткий раздел подменю «О MOVmedia»,
+    не отправляя вопрос модели и не показывая всё меню целиком."""
+    section = detect_about_section(message.text)
+    if section:
+        username = message.from_user.username
+        candidate = storage.get_or_create(message.chat.id, username)
+        history = candidate["history"]
+        history.append({"type": "user_input", "content": [{"type": "text", "text": message.text}]})
+        text = ABOUT_SECTION_TEXTS[section]
+        history.append({"type": "model_output", "content": [{"type": "text", "text": text}]})
+        storage.save_history(message.chat.id, history)
+        await message.answer(text, reply_markup=about_section_keyboard())
+        return
     await process_text_turn(message, message.from_user.username, message.text)
 
 
