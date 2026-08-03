@@ -7,7 +7,8 @@ storage.py
 техническую стадию (stage) и время последнего перехода, а также
 "память" о кандидате — чтобы бот никогда не переспрашивал то, что уже
 известно: имя, вакансия, дата интервью, ожидания по зарплате,
-отправленные ссылки, полученные файлы, предыдущие вопросы.
+отправленные ссылки, полученные файлы, предыдущие вопросы, а также
+данные кадрового резерва (желаемая роль, портфолио, резюме, о себе).
 """
 import json
 import logging
@@ -39,16 +40,38 @@ CREATE TABLE IF NOT EXISTS candidates (
     sent_links TEXT NOT NULL DEFAULT '[]',
     uploaded_files TEXT NOT NULL DEFAULT '[]',
     previous_questions TEXT NOT NULL DEFAULT '[]',
+    desired_role TEXT,
+    portfolio_link TEXT,
+    resume_note TEXT,
+    about_me TEXT,
+    is_reserve INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
 );
 """
 
+# Колонки, добавленные уже после первого релиза — накатываем через ALTER TABLE
+# на случай, если в базе уже есть таблица candidates старой структуры.
+_NEW_COLUMNS = {
+    "desired_role": "TEXT",
+    "portfolio_link": "TEXT",
+    "resume_note": "TEXT",
+    "about_me": "TEXT",
+    "is_reserve": "INTEGER NOT NULL DEFAULT 0",
+}
+
 with _lock:
     _conn.execute(_SCHEMA)
     _conn.commit()
+    for column, col_type in _NEW_COLUMNS.items():
+        try:
+            _conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} {col_type}")
+            _conn.commit()
+        except sqlite3.OperationalError:
+            pass  # колонка уже существует
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
+    keys = row.keys()
     return {
         "chat_id": row["chat_id"],
         "username": row["username"],
@@ -63,6 +86,11 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "sent_links": json.loads(row["sent_links"]),
         "uploaded_files": json.loads(row["uploaded_files"]),
         "previous_questions": json.loads(row["previous_questions"]),
+        "desired_role": row["desired_role"] if "desired_role" in keys else None,
+        "portfolio_link": row["portfolio_link"] if "portfolio_link" in keys else None,
+        "resume_note": row["resume_note"] if "resume_note" in keys else None,
+        "about_me": row["about_me"] if "about_me" in keys else None,
+        "is_reserve": bool(row["is_reserve"]) if "is_reserve" in keys else False,
     }
 
 
@@ -111,9 +139,12 @@ def update_stage(chat_id: int, stage: str) -> None:
 
 def update_profile(chat_id: int, **fields) -> None:
     """Обновляет память о кандидате: name, vacancy, interview_date,
-    salary_expectations. Пустые/None значения игнорируются, чтобы не
-    затирать уже известные данные."""
-    allowed = {"name", "vacancy", "interview_date", "salary_expectations"}
+    salary_expectations, desired_role, portfolio_link, resume_note, about_me.
+    Пустые/None значения игнорируются, чтобы не затирать уже известные данные."""
+    allowed = {
+        "name", "vacancy", "interview_date", "salary_expectations",
+        "desired_role", "portfolio_link", "resume_note", "about_me",
+    }
     updates = {k: v for k, v in fields.items() if k in allowed and v}
     if not updates:
         return
@@ -125,6 +156,14 @@ def update_profile(chat_id: int, **fields) -> None:
         )
         _conn.commit()
     logger.info("Профиль кандидата chat_id=%s обновлён: %s", chat_id, updates)
+
+
+def mark_reserve(chat_id: int) -> None:
+    """Помечает кандидата как добавленного в кадровый резерв."""
+    with _lock:
+        _conn.execute("UPDATE candidates SET is_reserve = 1 WHERE chat_id = ?", (chat_id,))
+        _conn.commit()
+    logger.info("Кандидат chat_id=%s добавлен в кадровый резерв", chat_id)
 
 
 def _append_json_list(chat_id: int, column: str, value) -> None:
