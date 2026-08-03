@@ -7,12 +7,13 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 import storage
-from gemini_client import GeminiError, run_turn
+from gigachat_client import GigaChatError, run_turn
 from system_prompt import known_test_task_links
 from config import (
     BOT_TOKEN,
     RECRUITER_CHAT_ID,
     PROXY_URL,
+    HIGH_LOAD_CONCURRENCY_THRESHOLD,
     SILENT_CANDIDATE_HOURS,
     SILENT_CHECK_INTERVAL_SECONDS,
 )
@@ -29,6 +30,16 @@ FALLBACK_MESSAGE = (
     "ближайшее время. Можно также попробовать написать ещё раз чуть позже — "
     "обычно всё быстро восстанавливается. Если появятся вопросы — пишите, я на связи."
 )
+
+HIGH_LOAD_MESSAGE = (
+    "Сейчас чуть больше обращений, чем обычно, поэтому отвечаю немного дольше — "
+    "спасибо за терпение, я уже готовлю ответ!"
+)
+
+TYPING_REFRESH_SECONDS = 4  # Telegram показывает статус "печатает..." около 5 секунд, обновляем чуть чаще
+
+_active_ai_requests = 0
+_active_ai_requests_lock = asyncio.Lock()
 
 # Стадии, которые кандидат чаще всего проходит вне этого диалога и которые
 # рекрутер выставляет вручную командой /status. Для каждой — короткая база
@@ -97,12 +108,27 @@ def make_tool_executor(chat_id: int, username: str | None):
     return tool_executor
 
 
+async def _keep_typing(chat_id: int) -> None:
+    """Периодически отправляет статус "печатает...", пока бот готовит ответ через AI."""
+    try:
+        while True:
+            await bot.send_chat_action(chat_id, "typing")
+            await asyncio.sleep(TYPING_REFRESH_SECONDS)
+    except asyncio.CancelledError:
+        pass
+
+
 async def run_and_reply(message: Message, candidate: dict, history: list, executor) -> None:
     """Обращается к AI и гарантирует, что кандидат получит ответ.
 
-    Повторные попытки уже сделаны внутри run_turn (gemini_client). Если
+    Повторные попытки уже сделаны внутри run_turn (gigachat_client). Если
     все попытки исчерпаны — не оставляем кандидата в тишине, а отвечаем
-    вежливым fallback-сообщением и уведомляем рекрутера о сбое."""
+    вежливым fallback-сообщением и уведомляем рекрутера о сбое.
+
+    Пока готовится ответ, кандидату показывается статус "печатает...", а при
+    повышенной нагрузке (много одновременных обращений к AI) — предупреждение,
+    что ответ может занять больше времени."""
+    global _active_ai_requests
     chat_id = message.chat.id
     profile = {
         "name": candidate.get("name"),
@@ -111,10 +137,22 @@ async def run_and_reply(message: Message, candidate: dict, history: list, execut
         "salary_expectations": candidate.get("salary_expectations"),
     }
 
+    async with _active_ai_requests_lock:
+        _active_ai_requests += 1
+        current_load = _active_ai_requests
+
+    if current_load > HIGH_LOAD_CONCURRENCY_THRESHOLD:
+        logger.info(
+            "Повышенная нагрузка (%s одновременных запросов к AI), предупреждаю кандидата chat_id=%s",
+            current_load, chat_id,
+        )
+        await message.answer(HIGH_LOAD_MESSAGE)
+
+    typing_task = asyncio.create_task(_keep_typing(chat_id))
     try:
-        logger.info("Отправка запроса в Gemini chat_id=%s", chat_id)
-        reply_text, updated_history = run_turn(history, executor, profile)
-    except GeminiError:
+        logger.info("Отправка запроса в GigaChat chat_id=%s", chat_id)
+        reply_text, updated_history = await asyncio.to_thread(run_turn, history, executor, profile)
+    except GigaChatError:
         logger.error("AI недоступен после всех попыток, использую fallback chat_id=%s", chat_id)
         storage.save_history(chat_id, history)
         if RECRUITER_CHAT_ID:
@@ -128,6 +166,10 @@ async def run_and_reply(message: Message, candidate: dict, history: list, execut
                 logger.exception("Не удалось уведомить рекрутера о сбое AI chat_id=%s", chat_id)
         await message.answer(FALLBACK_MESSAGE)
         return
+    finally:
+        typing_task.cancel()
+        async with _active_ai_requests_lock:
+            _active_ai_requests -= 1
 
     storage.save_history(chat_id, updated_history)
     for link in known_test_task_links():
@@ -228,6 +270,7 @@ async def handle_text(message: Message):
 async def process_text_turn(message: Message, username: str | None, user_text: str):
     candidate = storage.get_or_create(message.chat.id, username)
     history = candidate["history"]
+
     logger.info("Входящее сообщение chat_id=%s: %s", message.chat.id, user_text[:200])
     history.append({"type": "user_input", "content": [{"type": "text", "text": user_text}]})
 
