@@ -3,7 +3,7 @@ import time
 
 import requests
 
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from config import GEMINI_API_KEY, GEMINI_MODEL, PROXY_URL
 from system_prompt import build_system_prompt
 
 logger = logging.getLogger(__name__)
@@ -12,6 +12,7 @@ GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:
 
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 1.5
+PROXY_KWARGS = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
 
 class GeminiError(Exception):
@@ -180,6 +181,7 @@ def run_turn(history: list, tool_executor, candidate_profile: dict | None = None
                 "tools": [{"functionDeclarations": FUNCTIONS}],
             },
             timeout=60,
+            proxies=PROXY_KWARGS,
         )
         data = response.json()
         parts = data["candidates"][0].get("content", {}).get("parts", [])
