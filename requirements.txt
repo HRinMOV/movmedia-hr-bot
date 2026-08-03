@@ -4,3 +4,4 @@ flask>=3.0
 gunicorn>=21.2
 python-dotenv>=1.0
 aiohttp-socks>=0.8
+PySocks>=1.7.1
