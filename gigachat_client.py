@@ -1,4 +1,5 @@
 import logging
+import json
 import time
 import uuid
 
@@ -173,7 +174,12 @@ def _history_to_messages(history: list, candidate_profile: dict | None = None) -
                 "functions_state_id": item.get("functions_state_id", ""),
             })
         elif item_type == "function_result":
-            messages.append({"role": "function", "content": item.get("result", ""), "name": item.get("name", "")})
+            result_value = item.get("result", "")
+            if isinstance(result_value, (dict, list)):
+                content = json.dumps(result_value, ensure_ascii=False)
+            else:
+                content = json.dumps({"result": str(result_value)}, ensure_ascii=False)
+            messages.append({"role": "function", "content": content, "name": item.get("name", "")})
     return messages
 
 
