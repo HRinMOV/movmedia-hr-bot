@@ -4,14 +4,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # chat_id Алины (или группы рекрутинга) — куда бот шлёт уведомления и файлы
 RECRUITER_CHAT_ID = os.getenv("RECRUITER_CHAT_ID")
 
-# Модель и параметры GigaChat (https://developers.sber.ru/docs/ru/gigachat/api/overview)
-GIGACHAT_MODEL = os.getenv("GIGACHAT_MODEL", "GigaChat-2-Max")
-GIGACHAT_SCOPE = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+# Модель Gemini для ведения диалога
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+
+# Прокси/VPN для доступа к Telegram API, если он заблокирован на сервере
+# (обычный proxy URL вида socks5://host:port или http://user:pass@host:port)
+PROXY_URL = os.getenv("PROXY_URL")
 
 # Через сколько часов без ответа кандидата после отправки тестового считать его "пропавшим"
 SILENT_CANDIDATE_HOURS = int(os.getenv("SILENT_CANDIDATE_HOURS", "72"))
