@@ -173,6 +173,12 @@ SENSITIVE_TOPICS_TEXT = (
     "Я могу передать ваш вопрос рекрутеру или помочь узнать больше о компании и открытых вакансиях."
 )
 
+LEGAL_TOPIC_TEXT = (
+    "Хороший вопрос 🙂\n\n
+    "На старте сотрудничество с MOVmedia оформляется по договору ГПХ. Остальные детали — налоги, дальнейшее оформление, официальный статус — обсуждаются индивидуально с рекрутером на следующих этапах.\n\n"
+    "Могу передать ваш вопрос рекрутеру, если хотите уточнить что-то конкретное."
+)
+
 
 def detect_sensitive_topic(text: str) -> str | None:
     """Возвращает категорию чувствительной темы об условиях сотрудничества
@@ -748,13 +754,14 @@ async def handle_text(message: Message):
     не отправляя вопрос модели и не показывая всё меню целиком."""
     topic = detect_sensitive_topic(message.text)
     if topic:
+        reply_text = LEGAL_TOPIC_TEXT if topic == "legal" else SENSITIVE_TOPICS_TEXT
         username = message.from_user.username
         candidate = storage.get_or_create(message.chat.id, username)
         history = candidate["history"]
         history.append({"type": "user_input", "content": [{"type": "text", "text": message.text}]})
-        history.append({"type": "model_output", "content": [{"type": "text", "text": SENSITIVE_TOPICS_TEXT}]})
+        history.append({"type": "model_output", "content": [{"type": "text", "text": reply_text}]})
         storage.save_history(message.chat.id, history)
-        await message.answer(SENSITIVE_TOPICS_TEXT)
+        await message.answer(reply_text)
         return
     
     section = detect_about_section(message.text)
