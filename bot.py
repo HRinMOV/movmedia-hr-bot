@@ -168,6 +168,48 @@ def detect_about_section(text: str) -> str | None:
                 return section
     return None
 
+_ABOUT_AFFIRMATIVE_WORDS = {
+    "да", "ага", "угу", "конечно", "давай", "давайте", "хочу", "интересно",
+    "расскажи", "расскажите", "продолжай", "продолжить", "ок", "окей",
+    "хорошо", "yes",
+}
+
+
+def _is_affirmative_reply(text: str) -> bool:
+    """Проверяет, что кандидат коротко подтвердил предыдущий вопрос бота
+    (например, «да» на «Хотите узнать...?»), а не задал новый вопрос —
+    чтобы не спутать подтверждение со свободным вопросом кандидата."""
+    normalized = text.strip(" .!?\n").lower()
+    return normalized in _ABOUT_AFFIRMATIVE_WORDS
+
+
+# Если кандидат коротко подтверждает завершающий вопрос раздела подменю
+# «О MOVmedia» (например, ABOUT_CULTURE_TEXT заканчивается вопросом «Хотите
+# узнать, какой человек обычно чувствует себя комфортно в нашей команде?»),
+# показываем именно следующий по смыслу раздел, а не общий обзор компании и
+# не отдаём ответ модели «от себя» — модель не отслеживает, на какой именно
+# вопрос отвечает кандидат.
+_ABOUT_NEXT_SECTION_ON_CONFIRM = {
+    "culture": "why",
+}
+
+
+def _next_about_section_after_confirmation(history: list) -> str | None:
+    """Смотрит на последнее сообщение бота в истории: если это был текст
+    одного из разделов «О MOVmedia» с завершающим вопросом — возвращает
+    следующий логичный раздел для короткого подтверждающего ответа."""
+    for entry in reversed(history):
+        if entry.get("type") != "model_output":
+            continue
+        content = entry.get("content") or []
+        last_text = content[0].get("text") if content else None
+        for section_key, section_text in ABOUT_SECTION_TEXTS.items():
+            if last_text == section_text:
+                return _ABOUT_NEXT_SECTION_ON_CONFIRM.get(section_key)
+        return None
+    return None
+
+
 # Ключевые слова для приоритетного безопасного сценария по чувствительным темам
 # условий сотрудничества (отпуска, больничные, льготы/компенсации,
 # юридические условия). См. ТЗ «Обработка вопросов об условиях
@@ -802,6 +844,10 @@ async def handle_text(message: Message):
         return
     
     section = detect_about_section(message.text)
+    if not section and _is_affirmative_reply(message.text):
+        username = message.from_user.username
+        candidate = storage.get_or_create(message.chat.id, username)
+        section = _next_about_section_after_confirmation(candidate["history"])
     if section:
         username = message.from_user.username
         candidate = storage.get_or_create(message.chat.id, username)
