@@ -15,6 +15,14 @@ def _extract_field(markdown: str, label: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _strip_markdown_bold(text: str) -> str:
+    """Убирает markdown-звёздочки (**жирный**) из текста, который уходит в
+    Telegram напрямую, в обход модели (карточки вакансий и т.п.). Telegram не
+    рендерит их без parse_mode, поэтому кандидат иначе увидел бы литеральные
+    звёздочки в сообщении."""
+    return re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+
+
 def known_test_task_links() -> list[str]:
     """Список всех ссылок на тестовые задания из базы знаний.
 
@@ -43,7 +51,7 @@ def get_vacancy_section(name: str) -> str:
     text = _load_text("vacancies.md")
     pattern = rf"^##\s+{re.escape(name)}\s*\n(.*?)(?=^##\s+|\Z)"
     match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
-    return match.group(1).strip() if match else ""
+    return _strip_markdown_bold(match.group(1).strip()) if match else ""
 
 
 def get_company_overview_text() -> str:
@@ -51,7 +59,7 @@ def get_company_overview_text() -> str:
     «О MOVmedia» в главном меню, без обращения к модели. Единственный источник
     правды остаётся knowledge/company.md — редактируется только .md-файлом.
     """
-    return _load_text("company.md")
+    return _strip_markdown_bold(_load_text("company.md"))
 
 
 _PROFILE_LABELS = {
@@ -232,6 +240,16 @@ Telegram не поддерживает Markdown в обычных сообщен
 многоуровневые списки или другую Markdown-разметку. Пиши короткими абзацами,
 при необходимости начинай смысловой блок с эмодзи, а списки оформляй только
 простыми пунктами через «•».
+
+# Точность деталей по вакансиям и компании
+Если кандидат просит подробности по конкретному пункту (например: обязанности,
+требования, условия, зарплата, тестовое задание конкретной вакансии, раздел
+про компанию) — приводи эти детали точно по соответствующему разделу базы
+знаний выше, ничего не сокращай по смыслу и не заменяй своей версией. Можно
+адаптировать только оформление (см. правило выше про Markdown), но не
+содержание. Никогда не упоминай названия внутренних файлов базы знаний
+(например "vacancies.md" или "test_assignments.md") и любые другие служебные
+детали процесса — кандидат должен видеть только человекочитаемый текст.
 
 # Ограничение длины ответов
 Ответ кандидату должен быть коротким: оптимально 3-6 предложений, не более
