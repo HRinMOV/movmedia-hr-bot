@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.exceptions import TelegramBadRequest
 
 import storage
 import system_prompt
@@ -67,6 +68,17 @@ RESERVE_DONE_TEXT = (
     "Спасибо!\n\n"
     "Я передал ваши данные в базу кандидатов MOVmedia.\n\n"
     "Если появится подходящая возможность, рекрутер обязательно свяжется с вами."
+)
+
+FEEDBACK_PROMPT_TEXT = (
+    "Если при общении со мной возникли сложности или что-то пошло не так — "
+    "расскажите об этом одним сообщением. Я передам его команде напрямую, и "
+    "мы постараемся это устранить."
+)
+
+FEEDBACK_DONE_TEXT = (
+    "Спасибо, что рассказали! Я передал обратную связь команде — обязательно "
+    "разберёмся.\n\nЕсли будут ещё вопросы по вакансиям или компании — я на связи."
 )
 
 CANDIDATE_REMINDER_TEXT = (
@@ -216,6 +228,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🩵 О MOVmedia", callback_data="menu:about")],
         [InlineKeyboardButton(text="💼 Открытые вакансии", callback_data="menu:vacancies")],
         [InlineKeyboardButton(text="🚀 Хочу в команду MOVmedia", callback_data="menu:join")],
+        [InlineKeyboardButton(text="💬 Обратная связь о работе бота", callback_data="menu:feedback")],
     ])
 
 
@@ -467,15 +480,28 @@ async def cmd_status(message: Message):
     await message.answer(f"Готово: кандидату {target_chat_id} отправлено уведомление о стадии '{stage}'.")
 
 
+async def safe_edit_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+    """Обновляет текущее сообщение кандидата новым текстом/клавиатурой, а если
+    это невозможно — отправляет новое сообщение. Если Telegram отвечает, что
+    текст не изменился (кандидат повторно открыл тот же пункт меню), просто
+    ничего не переотправляем — иначе кандидат получил бы дублирующееся
+    сообщение с той же информацией."""
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            return
+        await callback.message.answer(text, reply_markup=reply_markup)
+    except Exception:
+        await callback.message.answer(text, reply_markup=reply_markup)
+
+
 # --- Главное меню и разделы (раздел «О MOVmedia» / «Открытые вакансии») ---
 
 @router.callback_query(F.data == "menu:root")
 async def cb_menu_root(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    try:
-        await callback.message.edit_text(MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
-    except Exception:
-        await callback.message.answer(MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
+    await safe_edit_or_send(callback, MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
     await callback.answer()
 
 
@@ -483,10 +509,7 @@ async def cb_menu_root(callback: CallbackQuery, state: FSMContext):
 async def cb_menu_about(callback: CallbackQuery, state: FSMContext):
     """Показывает интерактивное подменю «О MOVmedia» с коротким приветствием —
     вместо вывода всей базы знаний целиком."""
-    try:
-        await callback.message.edit_text(ABOUT_MENU_TEXT, reply_markup=about_menu_keyboard())
-    except Exception:
-        await callback.message.answer(ABOUT_MENU_TEXT, reply_markup=about_menu_keyboard())
+    await safe_edit_or_send(callback, ABOUT_MENU_TEXT, reply_markup=about_menu_keyboard())
     await callback.answer()
 
 
@@ -500,10 +523,7 @@ async def cb_about_section(callback: CallbackQuery, state: FSMContext):
     if not text:
         await callback.answer()
         return
-    try:
-        await callback.message.edit_text(text, reply_markup=about_section_keyboard())
-    except Exception:
-        await callback.message.answer(text, reply_markup=about_section_keyboard())
+    await safe_edit_or_send(callback, text, reply_markup=about_section_keyboard())
     await callback.answer()
 
 
@@ -516,10 +536,7 @@ async def cb_menu_vacancies(callback: CallbackQuery, state: FSMContext):
     else:
         text = "💼 Открытые вакансии:\n\nВыберите вакансию, чтобы узнать подробности."
         markup = vacancies_list_keyboard(names)
-    try:
-        await callback.message.edit_text(text, reply_markup=markup)
-    except Exception:
-        await callback.message.answer(text, reply_markup=markup)
+    await safe_edit_or_send(callback, text, reply_markup=markup)
     await callback.answer()
 
 
@@ -531,10 +548,7 @@ async def cb_vacancy_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Эта вакансия уже неактуальна, попробуйте посмотреть список ещё раз.", show_alert=True)
         return
     text = f"💼 {name}\n\n{section}"
-    try:
-        await callback.message.edit_text(text, reply_markup=vacancy_card_keyboard(name))
-    except Exception:
-        await callback.message.answer(text, reply_markup=vacancy_card_keyboard(name))
+    await safe_edit_or_send(callback, text, reply_markup=vacancy_card_keyboard(name))
     await callback.answer()
 
 
@@ -563,6 +577,38 @@ async def cb_apply_vacancy(callback: CallbackQuery, state: FSMContext):
     await run_and_reply(callback.message, candidate, history, executor)
 
 
+# --- Обратная связь о работе бота (не отзыв о компании) ---
+
+class FeedbackForm(StatesGroup):
+    """FSM короткого сценария обратной связи о работе самого бота-ассистента.
+    Кандидат присылает одно сообщение, которое напрямую пересылается
+    рекрутеру, чтобы команда могла оперативно исправить проблему."""
+    text = State()
+
+
+@router.callback_query(F.data == "menu:feedback")
+async def cb_menu_feedback(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(FeedbackForm.text)
+    await safe_edit_or_send(callback, FEEDBACK_PROMPT_TEXT, reply_markup=back_to_menu_keyboard())
+    await callback.answer()
+
+
+@router.message(FeedbackForm.text, F.text)
+async def feedback_got_text(message: Message, state: FSMContext):
+    await state.clear()
+    username = message.from_user.username
+    who = f"@{username}" if username else f"id {message.chat.id}"
+    if RECRUITER_CHAT_ID:
+        try:
+            await bot.send_message(
+                RECRUITER_CHAT_ID,
+                f"💬 Обратная связь о работе бота от {who}:\n\n{message.text}",
+            )
+        except Exception:
+            logger.exception("Не удалось переслать обратную связь о боте chat_id=%s", message.chat.id)
+    await message.answer(FEEDBACK_DONE_TEXT, reply_markup=main_menu_keyboard())
+
+
 # --- Сценарий «Хочу в команду MOVmedia» (кадровый резерв) ---
 
 @router.callback_query(F.data == "menu:join")
@@ -570,10 +616,7 @@ async def cb_menu_join(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(ReserveForm.name)
     text = RESERVE_INTRO_TEXT + "\n\n" + "Как вас зовут? Напишите, пожалуйста, имя и фамилию."
-    try:
-        await callback.message.edit_text(text, reply_markup=back_to_menu_keyboard())
-    except Exception:
-        await callback.message.answer(text, reply_markup=back_to_menu_keyboard())
+    await safe_edit_or_send(callback, text, reply_markup=back_to_menu_keyboard())
     await callback.answer()
 
 
@@ -665,18 +708,12 @@ async def cb_reserve_skip(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ReserveForm.salary)
         text = "Какой желаемый уровень дохода? Можно пропустить этот шаг."
         markup = skip_keyboard("salary")
-        try:
-            await callback.message.edit_text(text, reply_markup=markup)
-        except Exception:
-            await callback.message.answer(text, reply_markup=markup)
+        await safe_edit_or_send(callback, text, reply_markup=markup)
     elif field == "salary":
         await state.set_state(ReserveForm.about)
         text = "Расскажите коротко о себе, если хотите — это необязательно."
         markup = skip_keyboard("about")
-        try:
-            await callback.message.edit_text(text, reply_markup=markup)
-        except Exception:
-            await callback.message.answer(text, reply_markup=markup)
+        await safe_edit_or_send(callback, text, reply_markup=markup)
     elif field == "about":
         await _finish_reserve(callback.message.chat.id, callback.from_user.username, state, callback.message)
 
