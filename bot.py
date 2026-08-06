@@ -190,7 +190,9 @@ def _is_affirmative_reply(text: str) -> bool:
 # не отдаём ответ модели «от себя» — модель не отслеживает, на какой именно
 # вопрос отвечает кандидат.
 _ABOUT_NEXT_SECTION_ON_CONFIRM = {
+    "company": "culture",
     "culture": "team",
+    "why": "culture",
 }
 
 
