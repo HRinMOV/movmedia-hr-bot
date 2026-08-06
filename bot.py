@@ -538,11 +538,26 @@ async def safe_edit_or_send(callback: CallbackQuery, text: str, reply_markup=Non
         await callback.message.answer(text, reply_markup=reply_markup)
 
 
+def _log_menu_shown(callback: CallbackQuery, text: str) -> None:
+    """Записывает показанный кандидату текст меню/раздела в историю диалога.
+
+    Без этого AI и логика короткого подтверждения (см.
+    _next_about_section_after_confirmation) не видят, какой экран кандидат
+    только что открыл кнопкой — цепочка ломалась именно тогда, когда раздел
+    «О MOVmedia» открывали через инлайн-кнопки, а не свободным текстом."""
+    username = callback.from_user.username
+    candidate = storage.get_or_create(callback.message.chat.id, username)
+    history = candidate["history"]
+    history.append({"type": "model_output", "content": [{"type": "text", "text": text}]})
+    storage.save_history(callback.message.chat.id, history)
+
+
 # --- Главное меню и разделы (раздел «О MOVmedia» / «Открытые вакансии») ---
 
 @router.callback_query(F.data == "menu:root")
 async def cb_menu_root(callback: CallbackQuery, state: FSMContext):
     await state.clear()
+    _log_menu_shown(callback, MAIN_MENU_TEXT)
     await safe_edit_or_send(callback, MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
     await callback.answer()
 
@@ -551,6 +566,7 @@ async def cb_menu_root(callback: CallbackQuery, state: FSMContext):
 async def cb_menu_about(callback: CallbackQuery, state: FSMContext):
     """Показывает интерактивное подменю «О MOVmedia» с коротким приветствием —
     вместо вывода всей базы знаний целиком."""
+    _log_menu_shown(callback, ABOUT_MENU_TEXT)
     await safe_edit_or_send(callback, ABOUT_MENU_TEXT, reply_markup=about_menu_keyboard())
     await callback.answer()
 
@@ -565,6 +581,7 @@ async def cb_about_section(callback: CallbackQuery, state: FSMContext):
     if not text:
         await callback.answer()
         return
+    _log_menu_shown(callback, text)
     await safe_edit_or_send(callback, text, reply_markup=about_section_keyboard())
     await callback.answer()
 
