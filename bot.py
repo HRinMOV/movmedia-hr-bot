@@ -12,6 +12,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 import storage
 import system_prompt
+import notion_service
 from gigachat_client import GigaChatError, run_turn
 from system_prompt import known_test_task_links
 from config import (
@@ -361,7 +362,21 @@ def make_tool_executor(chat_id: int, username: str | None):
             reason = tool_input.get("reason", "info")
             message = tool_input.get("message", "")
             who = f"@{username}" if username else f"id {chat_id}"
-            text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}"
+            notion_line = ""
+            if reason == "candidate_summary":
+                # Карточка в Notion создаётся только для сценария "Открытые
+                # вакансии" (есть выбранная вакансия, это не кадровый резерв)
+                # и только в момент, когда AI прислал итоговую сводку по
+                # кандидату — не раньше. Название вакансии ни на что не
+                # влияет, кроме того, что оно записывается в карточку.
+                fresh_candidate = storage.get_or_create(chat_id, username)
+                if fresh_candidate.get("vacancy") and not fresh_candidate.get("is_reserve"):
+                    card = notion_service.create_or_update_candidate_card(
+                        fresh_candidate, summary_message=message,
+                    )
+                    if card and card.get("url"):
+                        notion_line = f"\n\n📇 Карточка в Notion: {card['url']}"
+            text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}{notion_line}"
             if RECRUITER_CHAT_ID:
                 asyncio.create_task(
                     bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML")
@@ -376,11 +391,25 @@ def make_tool_executor(chat_id: int, username: str | None):
         if name == "update_candidate_stage":
             stage = tool_input.get("stage")
             storage.update_stage(chat_id, stage)
+            if stage in ("test_sent", "test_received"):
+                fresh_candidate = storage.get_or_create(chat_id, username)
+                if fresh_candidate.get("vacancy") and not fresh_candidate.get("is_reserve"):
+                    sent_links = fresh_candidate.get("sent_links") or []
+                    notion_service.append_test_task_info(
+                        chat_id,
+                        fresh_candidate["vacancy"],
+                        test_link=(sent_links[-1] if stage == "test_sent" and sent_links else None),
+                        comment=("Кандидат прислал выполненное тестовое задание." if stage == "test_received" else None),
+                    )
             logger.info("update_candidate_stage chat_id=%s stage=%s", chat_id, stage)
             return f"Стадия обновлена: {stage}"
 
         if name == "update_candidate_profile":
             fields = {k: v for k, v in tool_input.items() if v}
+            # resume_link — параметр для модели; в памяти кандидата (и в
+            # Notion-карточке) резюме хранится в поле resume_note.
+            if "resume_link" in fields:
+                fields["resume_note"] = fields.pop("resume_link")
             storage.update_profile(chat_id, **fields)
             logger.info("update_candidate_profile chat_id=%s fields=%s", chat_id, list(fields))
             return "Профиль кандидата обновлён."
