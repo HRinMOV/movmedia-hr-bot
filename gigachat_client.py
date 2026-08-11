@@ -148,6 +148,14 @@ FUNCTIONS = [
                     "type": "string",
                     "description": "Зарплатные ожидания кандидата, если он их называл",
                 },
+                "resume_link": {
+                    "type": "string",
+                    "description": "Ссылка на резюме кандидата, если он присылал ссылку (не файл)",
+                },
+                "portfolio_link": {
+                    "type": "string",
+                    "description": "Ссылка(и) на портфолио кандидата, если он их присылал",
+                },
             },
             "required": [],
         },

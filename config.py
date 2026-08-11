@@ -28,3 +28,9 @@ SILENT_CANDIDATE_HOURS = int(os.getenv("SILENT_CANDIDATE_HOURS", "72"))
 SILENT_CHECK_INTERVAL_SECONDS = int(os.getenv("SILENT_CHECK_INTERVAL_SECONDS", "3600"))
 
 DB_PATH = os.getenv("DB_PATH", "candidates.db")
+
+# Интеграция с Notion (создание карточек кандидатов при отклике на вакансию).
+# Если не заданы — notion_service просто пропускает создание карточки и пишет
+# предупреждение в лог, остальная работа бота не нарушается.
+NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")

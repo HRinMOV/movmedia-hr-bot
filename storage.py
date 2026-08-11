@@ -70,6 +70,29 @@ with _lock:
             pass  # колонка уже существует
 
 
+
+
+# Связь кандидат+вакансия -> карточка Notion. Используется исключительно для
+# дедупликации (чтобы повторное сообщение/сбой/повторный запуск не создавали
+# вторую карточку) и чтобы во всех дальнейших уведомлениях рекрутеру можно
+# было подставить ссылку на уже созданную карточку. Ничего общего со
+# сценарием "Хочу в команду MOVmedia" не имеет - туда карточки не создаются.
+_NOTION_CARDS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS notion_cards (
+    chat_id INTEGER NOT NULL,
+    vacancy TEXT NOT NULL,
+    notion_page_id TEXT NOT NULL,
+    notion_page_url TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (chat_id, vacancy)
+);
+"""
+
+with _lock:
+    _conn.execute(_NOTION_CARDS_SCHEMA)
+    _conn.commit()
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict:
     keys = row.keys()
     return {
@@ -207,3 +230,33 @@ def find_silent_candidates(stage: str, older_than_seconds: int) -> list:
         )
         rows = cur.fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def get_notion_card(chat_id: int, vacancy: str) -> dict | None:
+    """Возвращает уже существующую карточку Notion для пары (chat_id, vacancy),
+    если она была создана ранее. Используется для дедупликации: одна и та же
+    пара кандидат+вакансия никогда не должна получить вторую карточку, но
+    один кандидат может иметь отдельные карточки при отклике на разные
+    вакансии."""
+    with _lock:
+        cur = _conn.execute(
+            "SELECT notion_page_id, notion_page_url FROM notion_cards WHERE chat_id = ? AND vacancy = ?",
+            (chat_id, vacancy),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"notion_page_id": row["notion_page_id"], "notion_page_url": row["notion_page_url"]}
+
+
+def save_notion_card(chat_id: int, vacancy: str, notion_page_id: str, notion_page_url: str) -> None:
+    """Запоминает связь кандидат+вакансия -> карточка Notion сразу после её
+    создания, чтобы дальнейшие обновления шли в ту же карточку."""
+    with _lock:
+        _conn.execute(
+            "INSERT OR REPLACE INTO notion_cards (chat_id, vacancy, notion_page_id, notion_page_url, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (chat_id, vacancy, notion_page_id, notion_page_url, time.time()),
+        )
+        _conn.commit()
+    logger.info("Сохранена связь с карточкой Notion chat_id=%s vacancy=%s page_id=%s", chat_id, vacancy, notion_page_id)
