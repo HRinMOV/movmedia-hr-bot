@@ -22,6 +22,8 @@ from config import (
     HIGH_LOAD_CONCURRENCY_THRESHOLD,
     SILENT_CANDIDATE_HOURS,
     SILENT_CHECK_INTERVAL_SECONDS,
+    DIALOG_IDLE_MINUTES,
+    DIALOG_IDLE_CHECK_INTERVAL_SECONDS,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -371,9 +373,13 @@ def make_tool_executor(chat_id: int, username: str | None):
                 # влияет, кроме того, что оно записывается в карточку.
                 fresh_candidate = storage.get_or_create(chat_id, username)
                 if fresh_candidate.get("vacancy") and not fresh_candidate.get("is_reserve"):
-                    card = notion_service.create_or_update_candidate_card(
-                        fresh_candidate, summary_message=message,
-                    )
+            try:
+                card = notion_service.create_or_update_candidate_card(
+                    fresh_candidate, summary_message=message,
+                )
+            except Exception:
+                logger.exception("Ошибка при создании/обновлении карточки Notion chat_id=%s", chat_id)
+                card = None
                     if card and card.get("url"):
                         notion_line = f"\n\n📇 Карточка в Notion: {card['url']}"
             text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}{notion_line}"
@@ -385,6 +391,7 @@ def make_tool_executor(chat_id: int, username: str | None):
                 logger.warning("RECRUITER_CHAT_ID не задан")
             if reason == "unknown_question":
                 storage.add_previous_question(chat_id, message)
+            storage.mark_summary_notified(chat_id)
             logger.info("notify_recruiter chat_id=%s reason=%s", chat_id, reason)
             return "Уведомление отправлено рекрутеру."
 
@@ -395,12 +402,15 @@ def make_tool_executor(chat_id: int, username: str | None):
                 fresh_candidate = storage.get_or_create(chat_id, username)
                 if fresh_candidate.get("vacancy") and not fresh_candidate.get("is_reserve"):
                     sent_links = fresh_candidate.get("sent_links") or []
+                try:
                     notion_service.append_test_task_info(
                         chat_id,
                         fresh_candidate["vacancy"],
                         test_link=(sent_links[-1] if stage == "test_sent" and sent_links else None),
                         comment=("Кандидат прислал выполненное тестовое задание." if stage == "test_received" else None),
                     )
+                except Exception:
+                    logger.exception("Ошибка при обновлении тестового в Notion chat_id=%s", chat_id)
             logger.info("update_candidate_stage chat_id=%s stage=%s", chat_id, stage)
             return f"Стадия обновлена: {stage}"
 
@@ -478,6 +488,16 @@ async def run_and_reply(message: Message, candidate: dict, history: list, execut
                 logger.exception("Не удалось уведомить рекрутера о сбое AI chat_id=%s", chat_id)
         await message.answer(FALLBACK_MESSAGE)
         return
+    except Exception:
+        logger.exception("Непредвиденная ошибка при обработке хода диалога chat_id=%s", chat_id)
+        storage.save_history(chat_id, history)
+        if RECRUITER_CHAT_ID:
+            who = f"@{candidate['username']}" if candidate.get("username") else f"id {chat_id}"
+            try:
+                await bot.send_message(
+                    RECRUITER_CHAT_ID,
+                    f"⚠️ Внутренняя ошибка при обработке сообщения кандидата {who} (см. логи). Кандидату отправлен fallback-ответ.",
+                )
     finally:
         typing_task.cancel()
         async with _active_ai_requests_lock:
@@ -910,6 +930,7 @@ async def handle_text(message: Message):
 async def process_text_turn(message: Message, username: str | None, user_text: str):
     candidate = storage.get_or_create(message.chat.id, username)
     history = candidate["history"]
+    storage.update_last_activity(message.chat.id)
 
     logger.info("Входящее сообщение chat_id=%s: %s", message.chat.id, user_text[:200])
     history.append({"type": "user_input", "content": [{"type": "text", "text": user_text}]})
@@ -952,6 +973,38 @@ async def check_silent_candidates():
                 logger.exception("Не удалось отправить напоминание кандидату chat_id=%s", candidate["chat_id"])
             storage.mark_flagged_silent(candidate["chat_id"])
 
+async def check_finished_dialogs():
+    """Фоновая задача: раз в DIALOG_IDLE_CHECK_INTERVAL_SECONDS ищет кандидатов,
+    которые писали боту, но не получили ни одного апдейта у рекрутера (ни через
+    notify_recruiter, ни автоматически) и не выходят на связь дольше
+    DIALOG_IDLE_MINUTES - считаем, что диалог завершён, и шлём рекрутеру
+    короткий апдейт, чтобы ни один отклик не остался без внимания, даже если
+    AI-модель не решила прислать полную сводку."""
+    while True:
+        await asyncio.sleep(DIALOG_IDLE_CHECK_INTERVAL_SECONDS)
+        finished = storage.find_finished_dialog_candidates(
+            older_than_seconds=DIALOG_IDLE_MINUTES * 60,
+        )
+        for candidate in finished:
+            who = f"@{candidate['username']}" if candidate.get("username") else f"id {candidate['chat_id']}"
+            lines = [f"💬 Короткий апдейт по кандидату {who} (диалог завершён)"]
+            if candidate.get("vacancy"):
+                lines.append(f"Вакансия: {candidate['vacancy']}")
+            if candidate.get("name"):
+                lines.append(f"Имя: {candidate['name']}")
+            if candidate.get("resume_note"):
+                lines.append(f"Резюме: {candidate['resume_note']}")
+            if candidate.get("salary_expectations"):
+                lines.append(f"Зарплатные ожидания: {candidate['salary_expectations']}")
+            lines.append(f"Стадия: {candidate.get('stage')}")
+            if RECRUITER_CHAT_ID:
+                try:
+                    await bot.send_message(RECRUITER_CHAT_ID, "\n".join(lines))
+                except Exception:
+                    logger.exception("Не удалось отправить автоматический апдейт chat_id=%s", candidate["chat_id"])
+                    continue
+            storage.mark_summary_notified(candidate["chat_id"])
+
 
 dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(router)
@@ -963,6 +1016,7 @@ async def main():
     bot = Bot(token=BOT_TOKEN, session=session)
 
     asyncio.create_task(check_silent_candidates())
+    asyncio.create_task(check_finished_dialogs())
     await dp.start_polling(bot, handle_signals=False)
 
 
