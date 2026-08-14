@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     resume_note TEXT,
     about_me TEXT,
     is_reserve INTEGER NOT NULL DEFAULT 0,
+            last_activity_at REAL,
+                    summary_notified INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
 );
 """
@@ -57,6 +59,8 @@ _NEW_COLUMNS = {
     "resume_note": "TEXT",
     "about_me": "TEXT",
     "is_reserve": "INTEGER NOT NULL DEFAULT 0",
+        "last_activity_at": "REAL",
+        "summary_notified": "INTEGER NOT NULL DEFAULT 0",
 }
 
 with _lock:
@@ -114,6 +118,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "resume_note": row["resume_note"] if "resume_note" in keys else None,
         "about_me": row["about_me"] if "about_me" in keys else None,
         "is_reserve": bool(row["is_reserve"]) if "is_reserve" in keys else False,
+                "last_activity_at": row["last_activity_at"] if "last_activity_at" in keys else None,
+                "summary_notified": bool(row["summary_notified"]) if "summary_notified" in keys else False,
     }
 
 
@@ -260,3 +266,43 @@ def save_notion_card(chat_id: int, vacancy: str, notion_page_id: str, notion_pag
         )
         _conn.commit()
     logger.info("Сохранена связь с карточкой Notion chat_id=%s vacancy=%s page_id=%s", chat_id, vacancy, notion_page_id)
+
+
+def update_last_activity(chat_id: int) -> None:
+    """Отмечает время последнего сообщения от кандидата. Используется фоновой
+    задачей check_finished_dialogs в bot.py, чтобы понять, что кандидат
+    закончил переписку с ботом и по нему пора отправить рекрутеру короткий
+    апдейт (если он ещё не был отправлен ни автоматически, ни через
+    notify_recruiter)."""
+    with _lock:
+        _conn.execute(
+            "UPDATE candidates SET last_activity_at = ? WHERE chat_id = ?",
+            (time.time(), chat_id),
+        )
+        _conn.commit()
+
+def mark_summary_notified(chat_id: int) -> None:
+    """Отмечает, что рекрутер уже получил апдейт по этому кандидату - вручную
+    (через notify_recruiter) или автоматически по завершению диалога, — чтобы
+    не отправлять дублирующий автоматический апдейт."""
+    with _lock:
+        _conn.execute(
+            "UPDATE candidates SET summary_notified = 1 WHERE chat_id = ?",
+            (chat_id,),
+        )
+        _conn.commit()
+
+def find_finished_dialog_candidates(older_than_seconds: int) -> list:
+    """Возвращает кандидатов сценария «Открытые вакансии» (is_reserve = 0),
+    которые писали боту (last_activity_at задан), не выходили на связь дольше
+    порога и по которым ещё не отправлялся ни один апдейт рекрутеру - ни
+    ручной через notify_recruiter, ни автоматический."""
+    threshold = time.time() - older_than_seconds
+    with _lock:
+        cur = _conn.execute(
+            "SELECT * FROM candidates WHERE last_activity_at IS NOT NULL "
+            "AND last_activity_at < ? AND summary_notified = 0 AND is_reserve = 0",
+            (threshold,),
+        )
+        rows = cur.fetchall()
+    return [_row_to_dict(r) for r in rows]
