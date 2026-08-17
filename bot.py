@@ -373,13 +373,13 @@ def make_tool_executor(chat_id: int, username: str | None):
                 # влияет, кроме того, что оно записывается в карточку.
                 fresh_candidate = storage.get_or_create(chat_id, username)
                 if fresh_candidate.get("vacancy") and not fresh_candidate.get("is_reserve"):
-            try:
-                card = notion_service.create_or_update_candidate_card(
-                    fresh_candidate, summary_message=message,
-                )
-            except Exception:
-                logger.exception("Ошибка при создании/обновлении карточки Notion chat_id=%s", chat_id)
-                card = None
+                    try:
+                        card = notion_service.create_or_update_candidate_card(
+                            fresh_candidate, summary_message=message,
+                        )
+                    except Exception:
+                        logger.exception("Ошибка при создании/обновлении карточки Notion chat_id=%s", chat_id)
+                        card = None
                     if card and card.get("url"):
                         notion_line = f"\n\n📇 Карточка в Notion: {card['url']}"
             text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}{notion_line}"
