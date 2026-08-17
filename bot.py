@@ -252,6 +252,7 @@ TYPING_REFRESH_SECONDS = 4  # Telegram показывает статус "печ
 
 _active_ai_requests = 0
 _active_ai_requests_lock = asyncio.Lock()
+_main_loop = None
 
 
 class ReserveForm(StatesGroup):
@@ -378,9 +379,13 @@ def make_tool_executor(chat_id: int, username: str | None):
                         notion_line = f"\n\n📇 Карточка в Notion: {card['url']}"
             text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}{notion_line}"
             if RECRUITER_CHAT_ID:
-                asyncio.create_task(
-                    bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML")
-                )
+                if _main_loop is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML"),
+                        _main_loop,
+                    )
+                else:
+                    logger.error("Main event loop is not set, cannot notify recruiter")
             else:
                 logger.warning("RECRUITER_CHAT_ID не задан")
             if reason == "unknown_question":
@@ -441,6 +446,8 @@ async def run_and_reply(message: Message, candidate: dict, history: list, execut
     повышенной нагрузке (много одновременных обращений к AI) — предупреждение,
     что ответ может занять больше времени."""
     global _active_ai_requests
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     chat_id = message.chat.id
     profile = {
         "name": candidate.get("name"),
