@@ -94,10 +94,9 @@ def _build_properties(candidate: dict) -> tuple[dict, list[str]]:
 
     vacancy = candidate.get("vacancy")
     if vacancy:
-        props[PROP_VACANCY] = {"select": {"name": vacancy[:100]}}
-
-    resume_prop, resume_extra = _url_property(candidate.get("resume_note"))
-    if resume_prop:
+        props[PROP_VACANCY] = {"multi_select": [{"name": vacancy[:100]}]}
+        
+        if resume_prop:
         props[PROP_RESUME] = resume_prop
     extra_links += [f"Резюме (доп. ссылка): {l}" for l in resume_extra]
 
