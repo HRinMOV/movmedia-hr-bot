@@ -34,3 +34,13 @@ DB_PATH = os.getenv("DB_PATH", "candidates.db")
 # предупреждение в лог, остальная работа бота не нарушается.
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+
+# Автоматические короткие апдейты рекрутеру по ВСЕМ кандидатам, которые
+# писали боту, а не только по тем, кто дошёл до полной сводки/резюме.
+# Через сколько минут без новых сообщений от кандидата считать диалог
+# завершённым и отправить рекрутеру короткий апдейт (если он ещё не
+# отправлялся для этого кандидата).
+DIALOG_IDLE_MINUTES = int(os.getenv("DIALOG_IDLE_MINUTES", "20"))
+
+# Как часто (в секундах) проверять базу на завершившиеся диалоги кандидатов
+DIALOG_IDLE_CHECK_INTERVAL_SECONDS = int(os.getenv("DIALOG_IDLE_CHECK_INTERVAL_SECONDS", "300"))
