@@ -450,8 +450,8 @@ def make_tool_executor(chat_id: int, username: str | None):
                     coro,
                     _main_loop,
                 )
-                else:
-                    logger.error("Main event loop is not set, cannot notify recruiter")
+            else:
+                logger.error("Main event loop is not set, cannot notify recruiter")
             else:
                 logger.warning("RECRUITER_CHAT_ID не задан")
             if reason == "unknown_question":
