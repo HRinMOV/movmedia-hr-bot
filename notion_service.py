@@ -24,7 +24,7 @@ import re
 import requests
 
 import storage
-from config import NOTION_TOKEN, NOTION_DATABASE_ID
+from config import NOTION_TOKEN, NOTION_DATABASE_ID, PROXY_URL
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,15 @@ def _configured() -> bool:
     return True
 
 
+def _proxies() -> dict | None:
+    """Прокси для обращений к api.notion.com - тот же PROXY_URL, что уже
+    используется для Telegram Bot API (см. bot.py). Notion тоже может быть
+    заблокирован на сервере, поэтому используем тот же механизм."""
+    if not PROXY_URL:
+        return None
+    return {"http": PROXY_URL, "https": PROXY_URL}
+
+
 def _rich_text(value: str) -> list:
     return [{"type": "text", "text": {"content": value[:2000]}}]
 
@@ -95,16 +104,16 @@ def _build_properties(candidate: dict) -> tuple[dict, list[str]]:
     vacancy = candidate.get("vacancy")
     if vacancy:
         props[PROP_VACANCY] = {"multi_select": [{"name": vacancy[:100]}]}
-        
+
     resume_prop, resume_extra = _url_property(candidate.get("resume_note"))
     if resume_prop:
         props[PROP_RESUME] = resume_prop
-    extra_links += [f"Резюме (доп. ссылка): {l}" for l in resume_extra]
+        extra_links += [f"Резюме (доп. ссылка): {l}" for l in resume_extra]
 
     portfolio_prop, portfolio_extra = _url_property(candidate.get("portfolio_link"))
     if portfolio_prop:
         props[PROP_PORTFOLIO] = portfolio_prop
-    extra_links += [f"Портфолио (доп. ссылка): {l}" for l in portfolio_extra]
+        extra_links += [f"Портфолио (доп. ссылка): {l}" for l in portfolio_extra]
 
     salary = candidate.get("salary_expectations")
     if salary:
@@ -170,6 +179,7 @@ def create_or_update_candidate_card(candidate: dict, summary_message: str | None
                 headers=_headers(),
                 json={"properties": properties},
                 timeout=30,
+                proxies=_proxies(),
             )
             response.raise_for_status()
             page_id = existing["notion_page_id"]
@@ -186,6 +196,7 @@ def create_or_update_candidate_card(candidate: dict, summary_message: str | None
                     "children": _body_children(candidate, summary_message, extra_links),
                 },
                 timeout=30,
+                proxies=_proxies(),
             )
             response.raise_for_status()
             data = response.json()
@@ -193,7 +204,7 @@ def create_or_update_candidate_card(candidate: dict, summary_message: str | None
             page_url = data.get("url", "")
             storage.save_notion_card(chat_id, vacancy, page_id, page_url)
             logger.info("Создана карточка Notion chat_id=%s vacancy=%s page_id=%s", chat_id, vacancy, page_id)
-        return {"id": page_id, "url": page_url}
+            return {"id": page_id, "url": page_url}
     except requests.RequestException:
         logger.exception("Ошибка обращения к Notion API chat_id=%s vacancy=%s", chat_id, vacancy)
         return None
@@ -225,6 +236,7 @@ def append_test_task_info(chat_id: int, vacancy: str, test_link: str | None = No
             headers=_headers(),
             json={"properties": properties},
             timeout=30,
+            proxies=_proxies(),
         )
         response.raise_for_status()
     except requests.RequestException:
