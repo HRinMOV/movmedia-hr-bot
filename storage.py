@@ -213,8 +213,8 @@ def add_sent_link(chat_id: int, link: str) -> None:
     _append_json_list(chat_id, "sent_links", link)
 
 
-def add_uploaded_file(chat_id: int, file_id: str) -> None:
-    _append_json_list(chat_id, "uploaded_files", file_id)
+def add_uploaded_file(chat_id: int, file_id: str, file_type: str = "document") -> None:
+    _append_json_list(chat_id, "uploaded_files", {"file_id": file_id, "type": file_type})
 
 
 def add_previous_question(chat_id: int, question: str) -> None:
