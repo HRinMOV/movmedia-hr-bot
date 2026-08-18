@@ -124,7 +124,7 @@ def _build_properties(candidate: dict) -> tuple[dict, list[str]]:
         props[PROP_RESUME] = resume_prop
         extra_links += [f"Резюме (доп. ссылка): {l}" for l in resume_extra]
 
-    portfolio_prop, portfolio_extra = _files_property(candidate.get("portfolio_link"), "Портфолио")
+    portfolio_prop, portfolio_extra = _url_property(candidate.get("portfolio_link"))
     if portfolio_prop:
         props[PROP_PORTFOLIO] = portfolio_prop
         extra_links += [f"Портфолио (доп. ссылка): {l}" for l in portfolio_extra]
