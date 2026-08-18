@@ -195,6 +195,29 @@ def create_or_update_candidate_card(candidate: dict, summary_message: str | None
                 timeout=30,
                 proxies=_proxies(),
             )
+            if response.status_code == 400 and "archived" in response.text.lower():
+                # Карточку могли вручную заархивировать/удалить в Notion -
+                # разархивируем её и повторяем запрос, чтобы не плодить
+                # дубликаты карточек для одного и того же кандидата.
+                logger.warning(
+                    "Карточка Notion chat_id=%s vacancy=%s page_id=%s заархивирована, разархивирую",
+                    chat_id, vacancy, existing['notion_page_id'],
+                )
+                unarchive_response = requests.patch(
+                    f"{NOTION_API_BASE}/pages/{existing['notion_page_id']}",
+                    headers=_headers(),
+                    json={"archived": False},
+                    timeout=30,
+                    proxies=_proxies(),
+                )
+                unarchive_response.raise_for_status()
+                response = requests.patch(
+                    f"{NOTION_API_BASE}/pages/{existing['notion_page_id']}",
+                    headers=_headers(),
+                    json={"properties": properties},
+                    timeout=30,
+                    proxies=_proxies(),
+                )
             response.raise_for_status()
             page_id = existing["notion_page_id"]
             page_url = existing["notion_page_url"]
