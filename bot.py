@@ -7,7 +7,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, InputMediaPhoto, Message
 from aiogram.exceptions import TelegramBadRequest
 
 import storage
@@ -372,6 +372,47 @@ def build_status_message(stage: str, extra: str | None) -> str | None:
     return " ".join(parts)
 
 
+async def _send_recruiter_update(chat_id: int, text: str, parse_mode: str | None = None) -> None:
+    """Отправляет рекрутеру одно сообщение с текстом и всеми файлами, которые
+    кандидат успел прислать (резюме, тестовое) - без отдельных дублирующих
+    сообщений "Файл от кандидата" сразу при получении. Вся дальнейшая работа
+    по кандидату рекрутер ведёт в карточке Notion, поэтому в Telegram нужно
+    одно консолидированное уведомление, а не несколько частями."""
+    if not RECRUITER_CHAT_ID:
+        return
+    candidate = storage.get_or_create(chat_id, None)
+    files = candidate.get("uploaded_files") or []
+
+    def _file_id(item):
+        return item.get("file_id") if isinstance(item, dict) else item
+
+    def _file_type(item):
+        return item.get("type", "document") if isinstance(item, dict) else "document"
+
+    if not files:
+        await bot.send_message(RECRUITER_CHAT_ID, text, parse_mode=parse_mode)
+        return
+
+    files = files[:10]  # ограничение Telegram на размер альбома
+    if len(files) == 1:
+        item = files[0]
+        if _file_type(item) == "photo":
+            await bot.send_photo(RECRUITER_CHAT_ID, _file_id(item), caption=text, parse_mode=parse_mode)
+        else:
+            await bot.send_document(RECRUITER_CHAT_ID, _file_id(item), caption=text, parse_mode=parse_mode)
+        return
+
+    media = []
+    for i, item in enumerate(files):
+        caption = text if i == 0 else None
+        item_parse_mode = parse_mode if i == 0 else None
+        if _file_type(item) == "photo":
+            media.append(InputMediaPhoto(media=_file_id(item), caption=caption, parse_mode=item_parse_mode))
+        else:
+            media.append(InputMediaDocument(media=_file_id(item), caption=caption, parse_mode=item_parse_mode))
+    await bot.send_media_group(RECRUITER_CHAT_ID, media)
+
+
 def make_tool_executor(chat_id: int, username: str | None):
     """Замыкание, чтобы tool-executor знал, какому кандидату он служит."""
 
@@ -399,12 +440,16 @@ def make_tool_executor(chat_id: int, username: str | None):
                     if card and card.get("url"):
                         notion_line = f"\n\n📇 Карточка в Notion: {card['url']}"
             text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}{notion_line}"
-            if RECRUITER_CHAT_ID:
-                if _main_loop is not None:
-                    asyncio.run_coroutine_threadsafe(
-                        bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML"),
-                        _main_loop,
-                    )
+        if RECRUITER_CHAT_ID:
+            if _main_loop is not None:
+                if reason == "candidate_summary":
+                    coro = _send_recruiter_update(chat_id, text, parse_mode="HTML")
+                else:
+                    coro = bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML")
+                asyncio.run_coroutine_threadsafe(
+                    coro,
+                    _main_loop,
+                )
                 else:
                     logger.error("Main event loop is not set, cannot notify recruiter")
             else:
@@ -794,20 +839,10 @@ async def reserve_got_portfolio(message: Message, state: FSMContext):
 
 @router.message(ReserveForm.resume, F.document | F.photo)
 async def reserve_got_resume_file(message: Message, state: FSMContext):
-    username = message.from_user.username
-    who = f"@{username}" if username else f"id {message.chat.id}"
-    if RECRUITER_CHAT_ID:
-        if message.document:
-            await bot.send_document(
-                RECRUITER_CHAT_ID, message.document.file_id,
-                caption=f"Резюме кандидата резерва {who}",
-            )
-        elif message.photo:
-            await bot.send_photo(
-                RECRUITER_CHAT_ID, message.photo[-1].file_id,
-                caption=f"Резюме кандидата резерва {who}",
-            )
-    storage.add_uploaded_file(message.chat.id, message.document.file_id if message.document else message.photo[-1].file_id)
+    if message.document:
+        storage.add_uploaded_file(message.chat.id, message.document.file_id, "document")
+    elif message.photo:
+        storage.add_uploaded_file(message.chat.id, message.photo[-1].file_id, "photo")
     await state.update_data(resume="резюме отправлено файлом")
     await state.set_state(ReserveForm.salary)
     await message.answer(
@@ -892,7 +927,7 @@ async def _finish_reserve(chat_id: int, username: str | None, state: FSMContext,
         summary_lines.append(f"О себе: {data['about']}")
     if RECRUITER_CHAT_ID:
         try:
-            await bot.send_message(RECRUITER_CHAT_ID, "\n".join(summary_lines))
+            await _send_recruiter_update(chat_id, "\n".join(summary_lines))
         except Exception:
             logger.exception("Не удалось уведомить рекрутера о новом кандидате резерва chat_id=%s", chat_id)
 
@@ -901,23 +936,16 @@ async def _finish_reserve(chat_id: int, username: str | None, state: FSMContext,
 
 @router.message(F.document | F.photo)
 async def handle_file(message: Message):
-    """Файлы (резюме, тестовое) сразу дублируются рекрутеру напрямую, в обход модели."""
+    """Файлы (резюме, тестовое) сохраняются и пересылаются рекрутеру одним
+    сообщением вместе со сводкой по кандидату (см. notify_recruiter,
+    _send_recruiter_update) - без отдельного дублирующего сообщения "Файл от
+    кандидата" сразу при получении."""
     username = message.from_user.username
-    who = f"@{username}" if username else f"id {message.chat.id}"
 
-    if RECRUITER_CHAT_ID:
-        if message.document:
-            await bot.send_document(
-                RECRUITER_CHAT_ID, message.document.file_id,
-                caption=f"Файл от кандидата {who}",
-            )
-            storage.add_uploaded_file(message.chat.id, message.document.file_id)
-        elif message.photo:
-            await bot.send_photo(
-                RECRUITER_CHAT_ID, message.photo[-1].file_id,
-                caption=f"Файл от кандидата {who}",
-            )
-            storage.add_uploaded_file(message.chat.id, message.photo[-1].file_id)
+    if message.document:
+        storage.add_uploaded_file(message.chat.id, message.document.file_id, "document")
+    elif message.photo:
+        storage.add_uploaded_file(message.chat.id, message.photo[-1].file_id, "photo")
 
     # Модель тоже должна знать, что файл получен, чтобы отреагировать текстом
     marker = "[Кандидат прислал файл — резюме или выполненное тестовое задание.]"
