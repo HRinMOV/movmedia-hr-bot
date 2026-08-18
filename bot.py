@@ -440,18 +440,18 @@ def make_tool_executor(chat_id: int, username: str | None):
                     if card and card.get("url"):
                         notion_line = f"\n\n📇 Карточка в Notion: {card['url']}"
             text = f"🔔 <b>{reason}</b> — кандидат {who}\n\n{message}{notion_line}"
-        if RECRUITER_CHAT_ID:
-            if _main_loop is not None:
-                if reason == "candidate_summary":
-                    coro = _send_recruiter_update(chat_id, text, parse_mode="HTML")
+            if RECRUITER_CHAT_ID:
+                if _main_loop is not None:
+                    if reason == "candidate_summary":
+                        coro = _send_recruiter_update(chat_id, text, parse_mode="HTML")
+                    else:
+                        coro = bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML")
+                    asyncio.run_coroutine_threadsafe(
+                        coro,
+                        _main_loop,
+                    )
                 else:
-                    coro = bot.send_message(RECRUITER_CHAT_ID, text, parse_mode="HTML")
-                asyncio.run_coroutine_threadsafe(
-                    coro,
-                    _main_loop,
-                )
-            else:
-                logger.error("Main event loop is not set, cannot notify recruiter")
+                    logger.error("Main event loop is not set, cannot notify recruiter")
             else:
                 logger.warning("RECRUITER_CHAT_ID не задан")
             if reason == "unknown_question":
