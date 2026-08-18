@@ -175,6 +175,7 @@ def create_or_update_candidate_card(candidate: dict, summary_message: str | None
             page_id = existing["notion_page_id"]
             page_url = existing["notion_page_url"]
             logger.info("Обновлена карточка Notion chat_id=%s vacancy=%s page_id=%s", chat_id, vacancy, page_id)
+            return {"id": page_id, "url": page_url}
         else:
             response = requests.post(
                 f"{NOTION_API_BASE}/pages",
