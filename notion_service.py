@@ -205,8 +205,10 @@ def create_or_update_candidate_card(candidate: dict, summary_message: str | None
             storage.save_notion_card(chat_id, vacancy, page_id, page_url)
             logger.info("Создана карточка Notion chat_id=%s vacancy=%s page_id=%s", chat_id, vacancy, page_id)
             return {"id": page_id, "url": page_url}
-    except requests.RequestException:
-        logger.exception("Ошибка обращения к Notion API chat_id=%s vacancy=%s", chat_id, vacancy)
+    except requests.RequestException as exc:
+        response = getattr(exc, "response", None)
+        detail = f" status={response.status_code} body={response.text[:500]}" if response is not None else " (нет ответа - таймаут/сетевая ошибка)"
+        logger.error("Ошибка обращения к Notion API chat_id=%s vacancy=%s%s", chat_id, vacancy, detail, exc_info=True)
         return None
 
 
@@ -239,5 +241,7 @@ def append_test_task_info(chat_id: int, vacancy: str, test_link: str | None = No
             proxies=_proxies(),
         )
         response.raise_for_status()
-    except requests.RequestException:
-        logger.exception("Ошибка обновления тестового задания в Notion chat_id=%s vacancy=%s", chat_id, vacancy)
+    except requests.RequestException as exc:
+        response = getattr(exc, "response", None)
+        detail = f" status={response.status_code} body={response.text[:500]}" if response is not None else " (нет ответа - таймаут/сетевая ошибка)"
+        logger.error("Ошибка обновления тестового задания в Notion chat_id=%s vacancy=%s%s", chat_id, vacancy, detail, exc_info=True)
