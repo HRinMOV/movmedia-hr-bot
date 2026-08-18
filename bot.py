@@ -256,6 +256,21 @@ _active_ai_requests = 0
 _active_ai_requests_lock = asyncio.Lock()
 _main_loop = None
 
+_chat_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_chat_lock(chat_id: int) -> asyncio.Lock:
+    """Гарантирует, что сообщения одного кандидата обрабатываются строго по
+    очереди, а не параллельно. Без этого несколько быстрых сообщений подряд
+    от одного кандидата уходят в AI одновременно, и ответы/сохранение профиля
+    могут выполниться в непредсказуемом порядке (см. баг с перепутанными
+    сообщениями и карточкой Notion без имени кандидата)."""
+    lock = _chat_locks.get(chat_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _chat_locks[chat_id] = lock
+    return lock
+
 
 class ReserveForm(StatesGroup):
     """FSM сценария «Хочу в команду MOVmedia»: последовательный сбор данных
@@ -439,7 +454,14 @@ async def _keep_typing(chat_id: int) -> None:
     """Периодически отправляет статус "печатает...", пока бот готовит ответ через AI."""
     try:
         while True:
-            await bot.send_chat_action(chat_id, "typing")
+            try:
+                await bot.send_chat_action(chat_id, "typing")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Telegram может временно ограничить частые запросы (flood control) -
+                # это не критично, просто пропускаем один цикл обновления статуса.
+                logger.debug("Не удалось отправить статус 'печатает' chat_id=%s", chat_id, exc_info=True)
             await asyncio.sleep(TYPING_REFRESH_SECONDS)
     except asyncio.CancelledError:
         pass
@@ -505,6 +527,10 @@ async def run_and_reply(message: Message, candidate: dict, history: list, execut
                     RECRUITER_CHAT_ID,
                     f"⚠️ Внутренняя ошибка при обработке сообщения кандидата {who} (см. логи). Кандидату отправлен fallback-ответ.",
                 )
+            except Exception:
+                logger.exception("Не удалось уведомить рекрутера о внутренней ошибке chat_id=%s", chat_id)
+        await message.answer(FALLBACK_MESSAGE)
+        return
     finally:
         typing_task.cancel()
         async with _active_ai_requests_lock:
@@ -675,21 +701,22 @@ async def cb_apply_vacancy(callback: CallbackQuery, state: FSMContext):
     name = callback.data.split("apply:", 1)[1]
     chat_id = callback.message.chat.id
     username = callback.from_user.username
-    candidate = storage.get_or_create(chat_id, username)
-    storage.update_profile(chat_id, vacancy=name)
-    candidate["vacancy"] = name
-    history = candidate["history"]
-    history.append({
-        "type": "user_input",
-        "content": [{"type": "text", "text": f"Кандидат нажал «Откликнуться» на вакансию «{name}» в меню бота."}],
-    })
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
     await callback.answer()
-    executor = make_tool_executor(chat_id, username)
-    await run_and_reply(callback.message, candidate, history, executor)
+    async with _get_chat_lock(chat_id):
+        candidate = storage.get_or_create(chat_id, username)
+        storage.update_profile(chat_id, vacancy=name)
+        candidate["vacancy"] = name
+        history = candidate["history"]
+        history.append({
+            "type": "user_input",
+            "content": [{"type": "text", "text": f"Кандидат нажал «Откликнуться» на вакансию «{name}» в меню бота."}],
+        })
+        executor = make_tool_executor(chat_id, username)
+        await run_and_reply(callback.message, candidate, history, executor)
 
 
 # --- Обратная связь о работе бота (не отзыв о компании) ---
@@ -935,15 +962,19 @@ async def handle_text(message: Message):
 
 
 async def process_text_turn(message: Message, username: str | None, user_text: str):
-    candidate = storage.get_or_create(message.chat.id, username)
-    history = candidate["history"]
-    storage.update_last_activity(message.chat.id)
+    """Обрабатывает сообщение кандидата строго по очереди (см. _get_chat_lock) -
+    иначе несколько быстрых сообщений подряд уходят в AI параллельно, и ответы
+    или сохранение профиля могут произойти в перепутанном порядке."""
+    async with _get_chat_lock(message.chat.id):
+        candidate = storage.get_or_create(message.chat.id, username)
+        history = candidate["history"]
+        storage.update_last_activity(message.chat.id)
 
-    logger.info("Входящее сообщение chat_id=%s: %s", message.chat.id, user_text[:200])
-    history.append({"type": "user_input", "content": [{"type": "text", "text": user_text}]})
+        logger.info("Входящее сообщение chat_id=%s: %s", message.chat.id, user_text[:200])
+        history.append({"type": "user_input", "content": [{"type": "text", "text": user_text}]})
 
-    executor = make_tool_executor(message.chat.id, username)
-    await run_and_reply(message, candidate, history, executor)
+        executor = make_tool_executor(message.chat.id, username)
+        await run_and_reply(message, candidate, history, executor)
 
 
 async def check_silent_candidates():
