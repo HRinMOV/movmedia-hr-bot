@@ -91,6 +91,20 @@ def _url_property(value: str | None) -> tuple[dict | None, list[str]]:
         return None, []
     return {"url": links[0]}, links[1:]
 
+def _files_property(value: str | None, label: str) -> tuple[dict | None, list[str]]:
+    """Возвращает свойство для Notion-поля типа "Files & media" со ссылкой на
+    внешний файл (без реальной загрузки байтов - Notion принимает такие
+    "external"-ссылки как обычные файлы в интерфейсе), плюс список оставшихся
+    ссылок, которые нужно дописать в тело карточки.
+
+    Поля "Резюме"/"Портфолио" в базе "Кандидаты (база данных)" настроены как
+    Files & media, а не URL - обычное {"url": ...} Notion отклоняет с 400
+    validation_error ("... is expected to be files")."""
+    links = _extract_links(value)
+    if not links:
+        return None, []
+    return {"files": [{"type": "external", "name": label, "external": {"url": links[0]}}]}, links[1:]
+
 
 def _build_properties(candidate: dict) -> tuple[dict, list[str]]:
     """Строит properties для создания/обновления страницы. Возвращает также
@@ -105,12 +119,12 @@ def _build_properties(candidate: dict) -> tuple[dict, list[str]]:
     if vacancy:
         props[PROP_VACANCY] = {"multi_select": [{"name": vacancy[:100]}]}
 
-    resume_prop, resume_extra = _url_property(candidate.get("resume_note"))
+    resume_prop, resume_extra = _files_property(candidate.get("resume_note"), "Резюме")
     if resume_prop:
         props[PROP_RESUME] = resume_prop
         extra_links += [f"Резюме (доп. ссылка): {l}" for l in resume_extra]
 
-    portfolio_prop, portfolio_extra = _url_property(candidate.get("portfolio_link"))
+    portfolio_prop, portfolio_extra = _files_property(candidate.get("portfolio_link"), "Портфолио")
     if portfolio_prop:
         props[PROP_PORTFOLIO] = portfolio_prop
         extra_links += [f"Портфолио (доп. ссылка): {l}" for l in portfolio_extra]
