@@ -434,6 +434,11 @@ def make_tool_executor(chat_id: int, username: str | None):
                         card = notion_service.create_or_update_candidate_card(
                             fresh_candidate, summary_message=message,
                         )
+                        if card:
+                            # Файлы, присланные кандидатом раньше, чем AI отправил
+                            # сводку (карточки ещё не существовало), прикрепляем
+                            # сейчас, когда карточка уже точно есть.
+                            notion_service.sync_uploaded_files(chat_id, storage.get_or_create(chat_id, username))
                     except Exception:
                         logger.exception("Ошибка при создании/обновлении карточки Notion chat_id=%s", chat_id)
                         card = None
@@ -939,13 +944,29 @@ async def handle_file(message: Message):
     """Файлы (резюме, тестовое) сохраняются и пересылаются рекрутеру одним
     сообщением вместе со сводкой по кандидату (см. notify_recruiter,
     _send_recruiter_update) - без отдельного дублирующего сообщения "Файл от
-    кандидата" сразу при получении."""
+    кандидата" сразу при получении. Если карточка кандидата в Notion уже
+    существует (сводка уже отправлялась раньше - типичный случай для файла
+    с выполненным тестовым заданием), файл сразу же прикрепляется и туда
+    (см. notion_service.sync_uploaded_files)."""
     username = message.from_user.username
 
     if message.document:
-        storage.add_uploaded_file(message.chat.id, message.document.file_id, "document")
+        storage.add_uploaded_file(
+            message.chat.id, message.document.file_id, "document",
+            file_name=message.document.file_name, mime_type=message.document.mime_type,
+        )
     elif message.photo:
-        storage.add_uploaded_file(message.chat.id, message.photo[-1].file_id, "photo")
+        storage.add_uploaded_file(message.chat.id, message.photo[-1].file_id, "photo", mime_type="image/jpeg")
+
+    candidate = storage.get_or_create(message.chat.id, username)
+    if candidate.get("vacancy") and not candidate.get("is_reserve"):
+        try:
+            # Блокирующие запросы (скачивание из Telegram, загрузка в Notion) -
+            # выполняем в отдельном потоке, чтобы не подвешивать event loop
+            # бота на время обработки чужого сообщения.
+            await asyncio.to_thread(notion_service.sync_uploaded_files, message.chat.id, candidate)
+        except Exception:
+            logger.exception("Ошибка синхронизации файлов кандидата с Notion chat_id=%s", message.chat.id)
 
     # Модель тоже должна знать, что файл получен, чтобы отреагировать текстом
     marker = "[Кандидат прислал файл — резюме или выполненное тестовое задание.]"

@@ -213,8 +213,41 @@ def add_sent_link(chat_id: int, link: str) -> None:
     _append_json_list(chat_id, "sent_links", link)
 
 
-def add_uploaded_file(chat_id: int, file_id: str, file_type: str = "document") -> None:
-    _append_json_list(chat_id, "uploaded_files", {"file_id": file_id, "type": file_type})
+def add_uploaded_file(chat_id: int, file_id: str, file_type: str = "document",
+                       file_name: str | None = None, mime_type: str | None = None) -> None:
+    """Сохраняет присланный кандидатом файл. notion_synced=False по умолчанию -
+    отмечается True функцией mark_uploaded_files_synced после того, как файл
+    реально прикреплён к карточке в Notion (см. notion_service.sync_uploaded_files),
+    чтобы не скачивать и не загружать его туда повторно при каждом новом
+    сообщении кандидата."""
+    entry = {"file_id": file_id, "type": file_type, "notion_synced": False}
+    if file_name:
+        entry["file_name"] = file_name
+    if mime_type:
+        entry["mime_type"] = mime_type
+    _append_json_list(chat_id, "uploaded_files", entry)
+
+
+def mark_uploaded_files_synced(chat_id: int, file_ids: list) -> None:
+    """Отмечает файлы кандидата как уже прикреплённые к карточке Notion -
+    см. add_uploaded_file и notion_service.sync_uploaded_files."""
+    if not file_ids:
+        return
+    with _lock:
+        cur = _conn.execute("SELECT uploaded_files FROM candidates WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+        items = json.loads(row[0]) if row and row[0] else []
+        changed = False
+        for item in items:
+            if isinstance(item, dict) and item.get("file_id") in file_ids:
+                item["notion_synced"] = True
+                changed = True
+        if changed:
+            _conn.execute(
+                "UPDATE candidates SET uploaded_files = ? WHERE chat_id = ?",
+                (json.dumps(items, ensure_ascii=False), chat_id),
+            )
+            _conn.commit()
 
 
 def add_previous_question(chat_id: int, question: str) -> None:
